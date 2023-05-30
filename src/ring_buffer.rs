@@ -1,4 +1,7 @@
-use std::cmp::min;
+use std::{
+    cmp::min,
+    ops::{Index, IndexMut},
+};
 
 pub struct RingBuffer<T: Clone> {
     buffer: Vec<T>,
@@ -50,8 +53,6 @@ impl<T: Clone> RingBuffer<T> {
         }
     }
 
-
-
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         if self.start < self.end {
             self.buffer[self.start..self.end].iter().chain([].iter())
@@ -80,6 +81,34 @@ impl<T: Clone> RingBuffer<T> {
         }
     }
 }
+
+impl<T: Clone> Index<usize> for RingBuffer<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        if index >= self.size {
+            panic!("Index out of bounds")
+        }
+        let i = (self.start + index) % self.capacity;
+        &self.buffer[i]
+    }
+}
+
+impl<T: Clone> IndexMut<usize> for RingBuffer<T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        if index >= self.size {
+            panic!("Index out of bounds")
+        }
+        let i = (self.start + index) % self.capacity;
+        &mut self.buffer[i]
+    }
+}
+
+// TODO:  Clone, Sort (if T can be ordered?), pop_start, push_start, to_vec, get, get_mut
+
+//If T is itself iterable, then I want to be able to transpose the buffer? Not sure that
+// makes sense. We'll have to think more about that later; how do I actually intend to
+// use this class?
 
 #[cfg(test)]
 mod tests {
@@ -145,7 +174,6 @@ mod tests {
 
     #[test]
     fn test_ring_buffer_iter_mut() {
-
         let mut buffer = RingBuffer::<f32>::new(4);
         let empty: Vec<&mut f32> = buffer.iter_mut().collect::<Vec<&mut f32>>();
         assert_eq!(empty, [] as [&mut f32; 0]);
@@ -173,4 +201,48 @@ mod tests {
         let empty: Vec<&mut f32> = buffer.iter_mut().collect::<Vec<&mut f32>>();
         assert_eq!(empty, [] as [&mut f32; 0]);
     }
+
+    #[test]
+    fn test_ring_buffer_index() {
+        let mut buffer = RingBuffer::<f32>::new(4);
+        buffer.push(1.0);
+        buffer.push(2.0);
+        buffer.push(3.0);
+        assert_eq!(buffer[0], 1.0);
+
+        buffer[1] = 4.0;
+        assert_eq!(buffer[1], 4.0);
+        assert_eq!(buffer.iter().collect::<Vec<&f32>>(), vec![&1.0, &4.0, &3.0]);
+
+        buffer.push(1.0);
+        assert_eq!(buffer[3], 1.0);
+        buffer.push(2.0);
+        buffer[0] = 5.0;
+        assert_eq!(
+            buffer.iter().collect::<Vec<&f32>>(),
+            vec![&5.0, &3.0, &1.0, &2.0]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Index out of bounds")]
+    fn test_ring_buffer_index_mut_out_of_bounds() {
+        let mut buffer = RingBuffer::<f32>::new(4);
+        buffer.push(1.0);
+        buffer.push(2.0);
+        buffer.push(3.0);
+        buffer[3] = 1.0;
+    }
+
+    #[test]
+    #[should_panic(expected = "Index out of bounds")]
+    fn test_ring_buffer_index_out_of_bounds() {
+        let mut buffer = RingBuffer::<f32>::new(4);
+        buffer.push(1.0);
+        buffer.push(2.0);
+        buffer.push(3.0);
+        buffer[3] == 4.0;
+    }
+
+
 }
