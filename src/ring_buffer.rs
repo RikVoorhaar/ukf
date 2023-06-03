@@ -1,30 +1,25 @@
+use arrayvec::ArrayVec;
 use std::{
     cmp::min,
     ops::{Index, IndexMut},
 };
 
-pub struct RingBuffer<T: Clone> {
-    buffer: Vec<T>,
+#[derive(Clone)]
+pub struct RingBuffer<T: Clone, const N: usize> {
+    buffer: ArrayVec<T, N>,
     start: usize,
     end: usize,
     capacity: usize,
     size: usize,
 }
 
-fn modular_sub<T>(a: T, b: T, modulus: T) -> T
-where
-    T: std::ops::Add<Output = T> + std::ops::Sub<Output = T> + std::ops::Rem<Output = T> + Copy,
-{
-    ((a + modulus) - b) % modulus
-}
-
-impl<T: Clone> RingBuffer<T> {
-    pub fn new(capacity: usize) -> Self {
+impl<T: Clone, const N: usize> RingBuffer<T, N> {
+    pub fn new() -> Self {
         RingBuffer {
-            buffer: Vec::<T>::with_capacity(capacity),
+            buffer: ArrayVec::<T, N>::new(),
             start: 0,
             end: 0,
-            capacity,
+            capacity: N,
             size: 0,
         }
     }
@@ -82,7 +77,44 @@ impl<T: Clone> RingBuffer<T> {
     }
 }
 
-impl<T: Clone> Index<usize> for RingBuffer<T> {
+impl<T: Clone, const N: usize, const M: usize> From<[T; M]> for RingBuffer<T, N> {
+    fn from(array: [T; M]) -> Self {
+        let mut buffer = RingBuffer::<T, N>::new();
+        let skip = if M > N { M - N } else { 0 };
+
+        array.into_iter().skip(skip).for_each(|v| buffer.push(v));
+        buffer
+    }
+}
+
+impl<T: Clone, const N: usize> From<Vec<T>> for RingBuffer<T, N> {
+    fn from(vec: Vec<T>) -> Self {
+        let mut buffer = RingBuffer::<T, N>::new();
+        let skip = if vec.len() > N { vec.len() - N } else { 0 };
+
+        vec.into_iter().skip(skip).for_each(|v| buffer.push(v));
+
+        buffer
+    }
+}
+
+impl<T: Clone, const N: usize, const M: usize> From<ArrayVec<T, M>> for RingBuffer<T, N> {
+    fn from(arrayvec: ArrayVec<T, M>) -> Self {
+        let mut buffer = RingBuffer::<T, N>::new();
+        let skip = if M > N { M - N } else { 0 };
+
+        arrayvec.into_iter().skip(skip).for_each(|v| buffer.push(v));
+        buffer
+    }
+}
+
+impl<T: Clone, const N: usize> Default for RingBuffer<T, N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Clone, const N: usize> Index<usize> for RingBuffer<T, N> {
     type Output = T;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -94,7 +126,7 @@ impl<T: Clone> Index<usize> for RingBuffer<T> {
     }
 }
 
-impl<T: Clone> IndexMut<usize> for RingBuffer<T> {
+impl<T: Clone, const N: usize> IndexMut<usize> for RingBuffer<T, N> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         if index >= self.size {
             panic!("Index out of bounds")
@@ -104,11 +136,12 @@ impl<T: Clone> IndexMut<usize> for RingBuffer<T> {
     }
 }
 
-// TODO:  Clone, Sort (if T can be ordered?), pop_start, push_start, to_vec, get, get_mut
-
-//If T is itself iterable, then I want to be able to transpose the buffer? Not sure that
-// makes sense. We'll have to think more about that later; how do I actually intend to
-// use this class?
+fn modular_sub<T>(a: T, b: T, modulus: T) -> T
+where
+    T: std::ops::Add<Output = T> + std::ops::Sub<Output = T> + std::ops::Rem<Output = T> + Copy,
+{
+    ((a + modulus) - b) % modulus
+}
 
 #[cfg(test)]
 mod tests {
@@ -116,7 +149,7 @@ mod tests {
 
     #[test]
     fn test_ring_buffer_push_pull() {
-        let mut buffer = RingBuffer::<i32>::new(3);
+        let mut buffer = RingBuffer::<i32, 3>::new();
         assert_eq!(buffer.size, 0);
         buffer.push(1);
         assert_eq!(buffer.size, 1);
@@ -148,7 +181,7 @@ mod tests {
 
     #[test]
     fn test_ring_buffer_iter() {
-        let mut buffer = RingBuffer::<f32>::new(4);
+        let mut buffer = RingBuffer::<f32, 4>::new();
         let empty: Vec<&f32> = buffer.iter().collect();
         assert_eq!(empty, [] as [&f32; 0]);
 
@@ -174,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_ring_buffer_iter_mut() {
-        let mut buffer = RingBuffer::<f32>::new(4);
+        let mut buffer = RingBuffer::<f32, 4>::new();
         let empty: Vec<&mut f32> = buffer.iter_mut().collect::<Vec<&mut f32>>();
         assert_eq!(empty, [] as [&mut f32; 0]);
 
@@ -204,7 +237,7 @@ mod tests {
 
     #[test]
     fn test_ring_buffer_index() {
-        let mut buffer = RingBuffer::<f32>::new(4);
+        let mut buffer = RingBuffer::<f32, 4>::new();
         buffer.push(1.0);
         buffer.push(2.0);
         buffer.push(3.0);
@@ -227,7 +260,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Index out of bounds")]
     fn test_ring_buffer_index_mut_out_of_bounds() {
-        let mut buffer = RingBuffer::<f32>::new(4);
+        let mut buffer = RingBuffer::<f32, 4>::new();
         buffer.push(1.0);
         buffer.push(2.0);
         buffer.push(3.0);
@@ -237,12 +270,63 @@ mod tests {
     #[test]
     #[should_panic(expected = "Index out of bounds")]
     fn test_ring_buffer_index_out_of_bounds() {
-        let mut buffer = RingBuffer::<f32>::new(4);
+        let mut buffer = RingBuffer::<f32, 4>::new();
         buffer.push(1.0);
         buffer.push(2.0);
         buffer.push(3.0);
-        buffer[3] == 4.0;
+        assert_eq!(buffer[3], 4.0);
     }
+
+    #[test]
+    fn test_ring_buffer_clone() {
+        let mut buffer = RingBuffer::<i32, 5>::new();
+        buffer.push(1);
+        buffer.push(2);
+        buffer.push(3);
+        buffer.push(4);
+
+        let buffer2 = buffer.clone();
+        assert_eq!(buffer2.size, buffer.size);
+        assert_eq!(buffer2.capacity, buffer.capacity);
+        assert_eq!(
+            buffer2.iter().collect::<Vec<&i32>>(),
+            buffer.iter().collect::<Vec<&i32>>()
+        );
+    }
+
+    #[test]
+    fn test_ring_buffer_from_array() {
+        let buffer = RingBuffer::<i32, 7>::from([1, 2, 3, 4, 5]);
+        assert_eq!(buffer.size, 5);
+        assert_eq!(buffer.capacity, 7);
+        assert_eq!(
+            buffer.iter().collect::<Vec<&i32>>(),
+            vec![&1, &2, &3, &4, &5]
+        );
+    }
+
+    #[test]
+    fn test_ring_buffer_from_vec() {
+        let buffer = RingBuffer::<i32, 7>::from(vec![1, 2, 3, 4, 5]);
+        assert_eq!(buffer.size, 5);
+        assert_eq!(buffer.capacity, 7);
+        assert_eq!(
+            buffer.iter().collect::<Vec<&i32>>(),
+            vec![&1, &2, &3, &4, &5]
+        );
+    }
+
+    #[test]
+    fn test_ring_buffer_from_arrayvec() {
+        let buffer = RingBuffer::<i32, 7>::from(ArrayVec::from([1, 2, 3, 4, 5]));
+        assert_eq!(buffer.size, 5);
+        assert_eq!(buffer.capacity, 7);
+        assert_eq!(
+            buffer.iter().collect::<Vec<&i32>>(),
+            vec![&1, &2, &3, &4, &5]
+        );
+    }
+
 
 
 }
