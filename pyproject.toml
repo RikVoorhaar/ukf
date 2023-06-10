@@ -1,0 +1,11 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+
+
+[project]
+name = "ukf"
+version = "0.0.1"
+dependencies = ["numpy", "filterpy", "matplotlib", "wheel"]
+
+[project.optional-dependencies]
+dev = ["pytest", "black", "ruff", "jupyter", "mypy"]
