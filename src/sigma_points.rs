@@ -1,5 +1,8 @@
 use ndarray::{Array1, Array2};
 use ndarray_linalg::cholesky::{Cholesky, UPLO};
+use pyo3::prelude::*;
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
+use pyo3::{pyclass, pymethods};
 use std::error::Error;
 
 pub trait SigmaPoints {
@@ -12,6 +15,7 @@ pub trait SigmaPoints {
     ) -> Result<Array2<f32>, Box<dyn Error>>;
 }
 
+#[pyclass]
 pub struct MerweSigmaPoints {
     size: usize,
     lambda: f32,
@@ -73,6 +77,47 @@ impl SigmaPoints for MerweSigmaPoints {
         Ok(sigmas)
     }
 }
+#[pymethods]
+impl MerweSigmaPoints {
+    #[new(text_signature = "(size, alpha, beta, kappa)")]
+    #[doc = "Initializes a new MerweSigmaPoints object with given size, alpha, beta, and kappa values."]
+    #[pyo3(signature = (size, alpha, beta, kappa))]
+    fn py_new(size: usize, alpha: f32, beta: f32, kappa: f32) -> Self {
+        MerweSigmaPoints::new(size, alpha, beta, kappa)
+    }
+
+    #[getter]
+    #[pyo3(name = "Wm")]
+    fn py_get_Wm(&self, py: Python<'_>) -> PyResult<Py<PyArray1<f32>>> {
+        let array = self.get_Wm().clone();
+        let py_array = array.into_pyarray(py).to_owned();
+        Ok(py_array)
+    }
+
+    #[getter]
+    #[pyo3(name = "Wc")]
+    fn py_get_Wc(&self, py: Python<'_>) -> PyResult<Py<PyArray1<f32>>> {
+        let array = self.get_Wc().clone();
+        let py_array = array.into_pyarray(py).to_owned();
+        Ok(py_array)
+    }
+
+    #[pyo3(name = "sigma_points")]
+    fn py_sigma_points(
+        &self,
+        py: Python<'_>,
+        x: PyReadonlyArray1<f32>,
+        P: PyReadonlyArray2<f32>,
+    ) -> PyResult<Py<PyArray2<f32>>> {
+        let x = x.as_array().to_owned();
+        let P = P.as_array().to_owned();
+        let sigmas = self.sigma_points(x, P).map_err(
+            |err| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", err)),
+        )?;
+        let py_array = sigmas.into_pyarray(py).to_owned();
+        Ok(py_array)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -91,7 +136,8 @@ mod tests {
         let sigma = sigma_point_gen.sigma_points(x, P).unwrap();
 
         let expected_sigma =
-            array![[0., 1.], [SQRT_2, 1.], [0., 3.], [SQRT_2, 1.], [0., -1.]];
+            array![[0., 1.], [SQRT_2, 1.], [0., 3.], [-SQRT_2, 1.], [0., -1.]];
+
         assert!(sigma.abs_diff_eq(&expected_sigma, 1e-4));
 
         let expected_Wc = array![2., 0.25, 0.25, 0.25, 0.25];
