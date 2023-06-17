@@ -55,7 +55,7 @@ import numpy as np
 n = 2
 sigma_point_gen = MerweScaledSigmaPoints(n, alpha=1, beta=2, kappa=0)
 
-np.random.seed(179)
+np.random.seed()
 x = np.arange(n)  # np.random.normal(size=n)
 P = np.diag(np.arange(1, n + 1))
 sigma = sigma_point_gen.sigma_points(x, P)

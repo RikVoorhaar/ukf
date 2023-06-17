@@ -2,7 +2,10 @@
 
 pub mod ring_buffer;
 pub mod sigma_points;
-// pub mod py;
+pub mod unscented_kalman_filter;
+
+pub mod types;
+pub use types::Float;
 
 use pyo3::prelude::*;
 use sigma_points::MerweSigmaPoints;
