@@ -19,6 +19,7 @@ pub trait SigmaPoints {
 }
 
 #[pyclass]
+#[derive(Clone)]
 pub struct MerweSigmaPoints {
     size: usize,
     lambda: Float,
