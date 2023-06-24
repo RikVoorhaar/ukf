@@ -8,10 +8,10 @@ pub mod types;
 pub use types::Float;
 
 use pyo3::prelude::*;
-use sigma_points::MerweSigmaPoints;
+use sigma_points::SigmaPoints;
 
 #[pymodule]
 fn ukf(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_class::<MerweSigmaPoints>()?;
+    m.add_class::<SigmaPoints>()?;
     Ok(())
 }

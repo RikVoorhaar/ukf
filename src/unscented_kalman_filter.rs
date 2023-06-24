@@ -1,11 +1,11 @@
 use ndarray::{Array1, Array2, ArrayView1, Axis};
 use ndarray_linalg::{FactorizeHInto, SolveH};
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::{IntoPyArray, PyArray1};
 use pyo3::prelude::*;
 use pyo3::{pyclass, pymethods};
 use std::error::Error;
 
-use crate::sigma_points::{MerweSigmaPoints, SigmaPoints};
+use crate::sigma_points::SigmaPoints;
 use crate::Float;
 
 #[pyclass]
@@ -18,7 +18,7 @@ pub struct UnscentedKalmanFilter {
     pub P_post: Array2<Float>,
     pub Q: Array2<Float>,
     pub R: Array2<Float>,
-    sigma_points: Box<dyn SigmaPoints + Send>,
+    sigma_points: SigmaPoints,
     pub dim_x: usize,
     pub dim_z: usize,
     hx: Box<dyn Fn(ArrayView1<Float>) -> PyResult<Array1<Float>> + Send>,
@@ -37,7 +37,7 @@ impl UnscentedKalmanFilter {
         dim_z: usize,
         hx: Box<dyn Fn(ArrayView1<Float>) -> PyResult<Array1<Float>> + Send>,
         fx: Box<dyn Fn(ArrayView1<Float>, Float) -> PyResult<Array1<Float>> + Send>,
-        sigma_points: Box<dyn SigmaPoints + Send>,
+        sigma_points: SigmaPoints,
     ) -> Self {
         let x: Array1<Float> = Array1::zeros(dim_x);
         let P: Array2<Float> = Array2::eye(dim_x);
@@ -191,7 +191,7 @@ impl UnscentedKalmanFilter {
             Ok(result)
         };
 
-        let sigma_points_rust = sigma_points.extract::<MerweSigmaPoints>()?;
+        let sigma_points_rust = sigma_points.extract::<MerweSigmaPointsContainer>()?;
 
         Ok(Self::new(dim_x, dim_z, hx_rust, fx_rust, sigma_points))
     }
