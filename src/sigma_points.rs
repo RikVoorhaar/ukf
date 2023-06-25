@@ -4,7 +4,7 @@ use ndarray_linalg::cholesky::{Cholesky, UPLO};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 use pyo3::{pyclass, pymethods};
-use std::error::Error;
+use std::{error::Error, sync::Arc};
 
 #[pyclass]
 #[derive(Clone)]
@@ -14,37 +14,43 @@ pub struct SigmaPointsContainer {
     Wc: Array1<Float>,
 }
 
-pub type SigmaPointsGeneratorMethod = dyn Fn(
-        &SigmaPointsContainer,
-        ArrayView1<Float>,
-        ArrayView2<Float>,
-    ) -> Result<Array2<Float>, Box<dyn Error>>
-    + Send;
+pub type SigmaPointsGeneratorMethod = Arc<
+    dyn Fn(
+            &SigmaPointsContainer,
+            ArrayView1<Float>,
+            ArrayView2<Float>,
+        ) -> Result<Array2<Float>, Box<dyn Error>>
+        + Send
+        + Sync,
+>;
 
 #[pyclass]
 #[derive(Clone)]
 pub struct SigmaPoints {
-    f: Box<SigmaPointsGeneratorMethod>,
+    f: SigmaPointsGeneratorMethod,
     container: SigmaPointsContainer,
 }
 
 impl SigmaPoints {
-    fn call(
-        self,
+    pub fn call(
+        &self,
         x: ArrayView1<Float>,
         P: ArrayView2<Float>,
     ) -> Result<Array2<Float>, Box<dyn Error>> {
         (self.f)(&self.container, x, P)
     }
 
-    pub fn get_Wm<'a>(&'a self) -> ArrayView1<'a, Float> {
+    pub fn get_Wm(&self) -> ArrayView1<Float> {
         self.container.Wm.view()
     }
 
-    pub fn get_Wc<'a>(&'a self) -> ArrayView1<'a, Float> {
+    pub fn get_Wc(&self) -> ArrayView1<Float> {
         self.container.Wc.view()
     }
 
+    pub fn n_points(&self) -> usize {
+        self.container.size
+    }
 }
 
 impl SigmaPoints {
@@ -56,45 +62,46 @@ impl SigmaPoints {
         kappa: Float,
     ) -> Self {
         let n: Float = size as Float;
-        let lambda: Float = alpha * alpha * (n + kappa) - n;
-        let c = 0.5 / (n + lambda);
+        let l: Float = alpha * alpha * (n + kappa) - n;
+        let c = 0.5 / (n + l);
 
         let mut Wc: Array1<Float> = Array1::from_elem(size * 2 + 1, c);
-        Wc[0] = lambda / (n + lambda) + (1.0 - alpha * alpha + beta);
+        Wc[0] = l / (n + l) + (1.0 - alpha * alpha + beta);
         let mut Wm: Array1<Float> = Array1::from_elem(size * 2 + 1, c);
-        Wm[0] = lambda / (n + lambda);
+        Wm[0] = l / (n + l);
 
-        let f: SigmaPointsGeneratorMethod =
-            |container: &SigmaPointsContainer,
-             x: ArrayView1<Float>,
-             P: ArrayView2<Float>|
-             -> Result<Array2<Float>, Box<dyn Error>> {
-                if x.len() != container.size {
-                    return Err("Input x of unexpected size".into());
-                }
-                if P.shape() != [container.size, container.size] {
-                    return Err("Input P of unexpected size".into());
-                }
+        let f_inner = move |container: &SigmaPointsContainer,
+                            x: ArrayView1<Float>,
+                            P: ArrayView2<Float>|
+              -> Result<Array2<Float>, Box<dyn Error>> {
+            if x.len() != container.size {
+                return Err("Input x of unexpected size".into());
+            }
+            if P.shape() != [container.size, container.size] {
+                return Err("Input P of unexpected size".into());
+            }
 
-                let n: Float = container.size as Float;
+            let n: Float = container.size as Float;
 
-                let U: Array2<Float> = ((lambda + n) * P).cholesky(UPLO::Upper)?;
+            let U: Array2<Float> =
+                ((lambda + n) * P.to_owned()).cholesky(UPLO::Upper)?;
 
-                let mut sigmas: Array2<Float> =
-                    Array2::zeros((2 * container.size + 1, container.size));
-                sigmas.row_mut(0).assign(&x.to_owned());
+            let mut sigmas: Array2<Float> =
+                Array2::zeros((2 * container.size + 1, container.size));
+            sigmas.row_mut(0).assign(&x.to_owned());
 
-                for k in 0..container.size {
-                    sigmas.row_mut(k + 1).assign(&(x + &U.row(k)));
-                    sigmas
-                        .row_mut(container.size + k + 1)
-                        .assign(&(x - &U.row(k)));
-                }
-                Ok(sigmas)
-            };
+            for k in 0..container.size {
+                sigmas.row_mut(k + 1).assign(&(x.to_owned() + U.row(k)));
+                sigmas
+                    .row_mut(container.size + k + 1)
+                    .assign(&(x.to_owned() - U.row(k)));
+            }
+            Ok(sigmas)
+        };
+        let f: SigmaPointsGeneratorMethod = Arc::new(f_inner);
 
         SigmaPoints {
-            f: Box::new(f),
+            f,
             container: SigmaPointsContainer { size, Wm, Wc },
         }
     }
@@ -149,7 +156,7 @@ mod tests {
         let x = Array1::from_iter(0..n).map(|x| *x as Float);
         let P = Array2::from_diag(&Array1::from_iter((1..=n).map(|x| x as Float)));
 
-        let sigma = sigma_point_gen.call(&x, &P).unwrap();
+        let sigma = sigma_point_gen.call(x.view(), P.view()).unwrap();
 
         let expected_sigma = array![
             [0., 1.],

@@ -3,10 +3,60 @@ use ndarray_linalg::{FactorizeHInto, SolveH};
 use numpy::{IntoPyArray, PyArray1};
 use pyo3::prelude::*;
 use pyo3::{pyclass, pymethods};
-use std::error::Error;
+use std::{error::Error, sync::Arc};
 
 use crate::sigma_points::SigmaPoints;
 use crate::Float;
+
+pub type RustTranstionFunction =
+    Arc<dyn Fn(ArrayView1<Float>, Float) -> PyResult<Array1<Float>> + Send + Sync>;
+
+pub enum HybridTransitionFunction {
+    Rust(RustTranstionFunction),
+    Python(PyObject),
+}
+
+impl HybridTransitionFunction {
+    pub fn call(&self, x: ArrayView1<Float>, dt: Float) -> PyResult<Array1<Float>> {
+        match self {
+            HybridTransitionFunction::Rust(f) => f(x, dt),
+            HybridTransitionFunction::Python(f) => {
+                Python::with_gil(|py| -> PyResult<Array1<Float>> {
+                    let x_py = x.to_owned().into_pyarray(py);
+                    let result_py = f.call1(py, (x_py, dt))?;
+                    let result_py: &PyArray1<Float> = result_py.downcast(py)?;
+                    let result = result_py.to_owned_array();
+                    Ok(result)
+                })
+            }
+        }
+    }
+}
+
+pub type RustMeasurementFunction =
+    Arc<dyn Fn(ArrayView1<Float>) -> PyResult<Array1<Float>> + Send + Sync>;
+
+pub enum HybridMeasurementFunction {
+    Rust(RustMeasurementFunction),
+    Python(PyObject),
+}
+
+impl HybridMeasurementFunction {
+    pub fn call(&self, x: ArrayView1<Float>) -> PyResult<Array1<Float>> {
+        match self {
+            HybridMeasurementFunction::Rust(f) => f(x),
+            HybridMeasurementFunction::Python(f) => {
+                Python::with_gil(|py| -> PyResult<Array1<Float>> {
+                    let x_py = x.to_owned().into_pyarray(py);
+                    let result_py = f.call1(py, (x_py,))?;
+                    let result_py: &PyArray1<Float> = result_py.downcast(py)?;
+                    let result = result_py.to_owned_array();
+                    Ok(result)
+                })
+            }
+        }
+    }
+}
 
 #[pyclass]
 pub struct UnscentedKalmanFilter {
@@ -21,8 +71,8 @@ pub struct UnscentedKalmanFilter {
     sigma_points: SigmaPoints,
     pub dim_x: usize,
     pub dim_z: usize,
-    hx: Box<dyn Fn(ArrayView1<Float>) -> PyResult<Array1<Float>> + Send>,
-    fx: Box<dyn Fn(ArrayView1<Float>, Float) -> PyResult<Array1<Float>> + Send>,
+    hx: HybridMeasurementFunction,
+    fx: HybridTransitionFunction,
     sigmas_f: Array2<Float>,
     sigmas_h: Array2<Float>,
     pub K: Array2<Float>,
@@ -35,8 +85,8 @@ impl UnscentedKalmanFilter {
     pub fn new(
         dim_x: usize,
         dim_z: usize,
-        hx: Box<dyn Fn(ArrayView1<Float>) -> PyResult<Array1<Float>> + Send>,
-        fx: Box<dyn Fn(ArrayView1<Float>, Float) -> PyResult<Array1<Float>> + Send>,
+        hx: HybridMeasurementFunction,
+        fx: HybridTransitionFunction,
         sigma_points: SigmaPoints,
     ) -> Self {
         let x: Array1<Float> = Array1::zeros(dim_x);
@@ -84,7 +134,7 @@ impl UnscentedKalmanFilter {
     ) -> (Array1<Float>, Array2<Float>) {
         let x: Array1<Float> = self.sigma_points.get_Wm().dot(sigmas);
         let y = sigmas - x.clone().insert_axis(Axis(0));
-        let wc_diag = Array2::from_diag(self.sigma_points.get_Wc());
+        let wc_diag = Array2::from_diag(&self.sigma_points.get_Wc().to_owned());
         let mut P = y.t().dot(&wc_diag).dot(&y);
         // FIXME: the diagonal matrix here is inefficient.
 
@@ -95,12 +145,12 @@ impl UnscentedKalmanFilter {
     }
 
     fn compute_process_sigmas(&mut self, dt: Float) -> Result<(), Box<dyn Error>> {
-        let sigmas = self.sigma_points.sigma_points(&self.x, &self.P)?;
+        let sigmas = self.sigma_points.call(self.x.view(), self.P.view())?;
 
         for (row_sigmas, mut row_sigmas_f) in
             sigmas.outer_iter().zip(self.sigmas_f.rows_mut())
         {
-            let result = (self.fx)(row_sigmas, dt)?;
+            let result = self.fx.call(row_sigmas, dt)?;
             row_sigmas_f.assign(&result);
         }
 
@@ -137,7 +187,7 @@ impl UnscentedKalmanFilter {
 
     pub fn update(&mut self, z: Array1<Float>) -> Result<(), Box<dyn Error>> {
         for i in 0..self.sigma_points.n_points() {
-            let new_row = (self.hx)(self.sigmas_f.row(i))?;
+            let new_row = self.hx.call(self.sigmas_f.row(i))?;
             self.sigmas_h.row_mut(i).assign(&new_row);
         }
 
@@ -175,25 +225,16 @@ impl UnscentedKalmanFilter {
         hx: PyObject,
         fx: PyObject,
         sigma_points: &PyAny,
-        py: Python,
     ) -> PyResult<Self> {
-        let hx_rust = |x: ArrayView1<Float>| -> PyResult<Array1<Float>> {
-            let x_py = x.to_owned().into_pyarray(py);
-            let result_py: &PyArray1<Float> = hx.call1(py, (x_py,))?.downcast(py)?;
-            let result = result_py.to_owned_array();
-            Ok(result)
-        };
+        let sigma_points_rust = sigma_points.extract::<SigmaPoints>()?;
 
-        let fx_rust = |x: ArrayView1<Float>, dt: Float| -> PyResult<Array1<Float>> {
-            let x_py = x.to_owned().into_pyarray(py);
-            let result_py: &PyArray1<Float> = fx.call1(py, (x_py, dt))?.downcast(py)?;
-            let result = result_py.to_owned_array();
-            Ok(result)
-        };
-
-        let sigma_points_rust = sigma_points.extract::<MerweSigmaPointsContainer>()?;
-
-        Ok(Self::new(dim_x, dim_z, hx_rust, fx_rust, sigma_points))
+        Ok(Self::new(
+            dim_x,
+            dim_z,
+            HybridMeasurementFunction::Python(hx),
+            HybridTransitionFunction::Python(fx),
+            sigma_points_rust,
+        ))
     }
 }
 
