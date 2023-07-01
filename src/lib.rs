@@ -9,9 +9,14 @@ pub use types::Float;
 
 use pyo3::prelude::*;
 use sigma_points::SigmaPoints;
+use unscented_kalman_filter::UnscentedKalmanFilter;
 
 #[pymodule]
 fn ukf(_py: Python, m: &PyModule) -> PyResult<()> {
+    std::env::set_var("RUST_BACKTRACE", "full");
+    pyo3_log::init();
+
     m.add_class::<SigmaPoints>()?;
+    m.add_class::<UnscentedKalmanFilter>()?;
     Ok(())
 }

@@ -140,6 +140,18 @@ impl SigmaPoints {
         let py_array = array.into_pyarray(py).to_owned();
         Ok(py_array)
     }
+
+    #[staticmethod]
+    #[pyo3(name = "merwe")]
+    pub fn py_merwe(
+        n: usize,
+        alpha: Float,
+        beta: Float,
+        kappa: Float,
+    ) -> PyResult<Self> {
+        let sigma_point_gen = SigmaPoints::merwe(n, alpha, beta, kappa, 0.0);
+        Ok(sigma_point_gen)
+    }
 }
 
 #[cfg(test)]

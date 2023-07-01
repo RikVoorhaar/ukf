@@ -1,6 +1,8 @@
+use log::debug;
 use ndarray::{Array1, Array2, ArrayView1, Axis};
 use ndarray_linalg::{FactorizeHInto, SolveH};
-use numpy::{IntoPyArray, PyArray1};
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::{pyclass, pymethods};
 use std::{error::Error, sync::Arc};
@@ -24,7 +26,12 @@ impl HybridTransitionFunction {
                 Python::with_gil(|py| -> PyResult<Array1<Float>> {
                     let x_py = x.to_owned().into_pyarray(py);
                     let result_py = f.call1(py, (x_py, dt))?;
-                    let result_py: &PyArray1<Float> = result_py.downcast(py)?;
+                    let result_py: &PyArray1<Float> =
+                        result_py.downcast(py).map_err(|_| {
+                            PyValueError::new_err("Could not downcast result to PyArray1. \
+                                Make sure return type is 1-dimensional numpy array of the right dtype.")
+                        })?;
+
                     let result = result_py.to_owned_array();
                     Ok(result)
                 })
@@ -49,7 +56,11 @@ impl HybridMeasurementFunction {
                 Python::with_gil(|py| -> PyResult<Array1<Float>> {
                     let x_py = x.to_owned().into_pyarray(py);
                     let result_py = f.call1(py, (x_py,))?;
-                    let result_py: &PyArray1<Float> = result_py.downcast(py)?;
+                    let result_py: &PyArray1<Float> =
+                        result_py.downcast(py).map_err(|_| {
+                            PyValueError::new_err("Could not downcast result to PyArray1. \
+                                Make sure return type is 1-dimensional numpy array of the right dtype.")
+                        })?;
                     let result = result_py.to_owned_array();
                     Ok(result)
                 })
@@ -132,10 +143,13 @@ impl UnscentedKalmanFilter {
         sigmas: &Array2<Float>,
         noise_cov: Option<&Array2<Float>>,
     ) -> (Array1<Float>, Array2<Float>) {
-        let x: Array1<Float> = self.sigma_points.get_Wm().dot(sigmas);
-        let y = sigmas - x.clone().insert_axis(Axis(0));
+        let x: Array1<Float> = self.sigma_points.get_Wm().dot(&sigmas.t());
+
+        let y = sigmas - x.clone().insert_axis(Axis(1));
+
         let wc_diag = Array2::from_diag(&self.sigma_points.get_Wc().to_owned());
-        let mut P = y.t().dot(&wc_diag).dot(&y);
+
+        let mut P = y.dot(&wc_diag).dot(&y.t());
         // FIXME: the diagonal matrix here is inefficient.
 
         if let Some(nc) = noise_cov {
@@ -147,11 +161,12 @@ impl UnscentedKalmanFilter {
     fn compute_process_sigmas(&mut self, dt: Float) -> Result<(), Box<dyn Error>> {
         let sigmas = self.sigma_points.call(self.x.view(), self.P.view())?;
 
-        for (row_sigmas, mut row_sigmas_f) in
-            sigmas.outer_iter().zip(self.sigmas_f.rows_mut())
+        for (col_sigmas, mut col_sigmas_f) in
+            sigmas.outer_iter().zip(self.sigmas_f.columns_mut())
         {
-            let result = self.fx.call(row_sigmas, dt)?;
-            row_sigmas_f.assign(&result);
+            let result = self.fx.call(col_sigmas, dt)?;
+
+            col_sigmas_f.assign(&result);
         }
 
         Ok(())
@@ -176,19 +191,21 @@ impl UnscentedKalmanFilter {
         z: ArrayView1<Float>,
     ) -> Array2<Float> {
         let Wc = self.sigma_points.get_Wc();
-        let mut L = &self.sigmas_f - x.insert_axis(Axis(0)).to_owned();
+
+        let mut L = &self.sigmas_f - x.insert_axis(Axis(1)).to_owned();
+
         for k in 0..self.sigma_points.n_points() {
             L.row_mut(k).mapv_inplace(|v| v * Wc[k]);
         }
-        let R = &self.sigmas_h - z.insert_axis(Axis(0)).to_owned();
+        let R = &self.sigmas_h - z.insert_axis(Axis(1)).to_owned();
 
-        L.t().dot(&R)
+        L.dot(&R.t())
     }
 
-    pub fn update(&mut self, z: Array1<Float>) -> Result<(), Box<dyn Error>> {
+    pub fn update(&mut self, z: ArrayView1<Float>) -> Result<(), Box<dyn Error>> {
         for i in 0..self.sigma_points.n_points() {
-            let new_row = self.hx.call(self.sigmas_f.row(i))?;
-            self.sigmas_h.row_mut(i).assign(&new_row);
+            let new_column = self.hx.call(self.sigmas_f.column(i))?;
+            self.sigmas_h.column_mut(i).assign(&new_column);
         }
 
         let (z_pred, S) = self.unscented_transform(&self.sigmas_h, Some(&self.R));
@@ -203,8 +220,8 @@ impl UnscentedKalmanFilter {
                 row_K.assign(&S_factor.solveh_into(row_Pxz).unwrap())
             });
 
-        self.z = z.clone();
-        self.y = z - z_pred;
+        self.z = z.to_owned();
+        self.y = z.to_owned() - z_pred;
 
         self.x += &self.K.dot(&self.y);
         self.P -= &self.K.dot(&self.S.dot(&self.K.t()));
@@ -236,40 +253,99 @@ impl UnscentedKalmanFilter {
             sigma_points_rust,
         ))
     }
+
+    #[pyo3(name = "predict")]
+    fn py_predict(&mut self, dt: Float) -> PyResult<()> {
+        self.predict(dt).map_err(|err| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Error in predict: {}",
+                err
+            ))
+        })
+    }
+
+    #[pyo3(name = "update")]
+    fn py_update(&mut self, z: PyReadonlyArray1<Float>) -> PyResult<()> {
+        let z = z.as_array();
+        self.update(z).map_err(|err| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Error in update: {}",
+                err
+            ))
+        })
+    }
+
+    #[getter]
+    #[pyo3(name = "x")]
+    fn py_get_x(&self, py: Python<'_>) -> PyResult<Py<PyArray1<Float>>> {
+        let array = self.x.clone().into_pyarray(py).to_owned();
+        Ok(array)
+    }
+
+    #[getter]
+    #[pyo3(name = "P")]
+    fn py_get_P(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
+        let array = self.P.clone().into_pyarray(py).to_owned();
+        Ok(array)
+    }
+
+    #[getter]
+    #[pyo3(name = "Q")]
+    fn py_get_Q(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
+        let array = self.Q.clone().into_pyarray(py).to_owned();
+        Ok(array)
+    }
+
+    #[getter]
+    #[pyo3(name = "R")]
+    fn py_get_R(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
+        let array = self.R.clone().into_pyarray(py).to_owned();
+        Ok(array)
+    }
+
+    #[getter]
+    #[pyo3(name = "sigma_points")]
+    fn py_get_sigma_points(&self) -> PyResult<SigmaPoints> {
+        Ok(self.sigma_points.clone())
+    }
+
+    #[getter]
+    #[pyo3(name = "dim_x")]
+    fn py_get_dim_x(&self) -> PyResult<usize> {
+        Ok(self.dim_x)
+    }
+
+    #[getter]
+    #[pyo3(name = "dim_z")]
+    fn py_get_dim_z(&self) -> PyResult<usize> {
+        Ok(self.dim_z)
+    }
+
+    #[getter]
+    #[pyo3(name = "K")]
+    fn py_get_K(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
+        let array = self.K.clone().into_pyarray(py).to_owned();
+        Ok(array)
+    }
+
+    #[getter]
+    #[pyo3(name = "y")]
+    fn py_get_y(&self, py: Python<'_>) -> PyResult<Py<PyArray1<Float>>> {
+        let array = self.y.clone().into_pyarray(py).to_owned();
+        Ok(array)
+    }
+
+    #[getter]
+    #[pyo3(name = "z")]
+    fn py_get_z(&self, py: Python<'_>) -> PyResult<Py<PyArray1<Float>>> {
+        let array = self.z.clone().into_pyarray(py).to_owned();
+        Ok(array)
+    }
+
+    #[getter]
+    #[pyo3(name = "S")]
+    fn py_get_S(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
+        let array = self.S.clone().into_pyarray(py).to_owned();
+        Ok(array)
+    }
 }
-
-// TODO: Expose to Python and write unit tests.
-// Passing fx and hx from Python to Rust can be slow, so we should think how to do that
-// efficiently. But more than that, we should also allow for factories for useful
-// functions like f, h that are just matrix multiplication...
-//
-// What would be really cool is to take some kind of framework that can compile into
-// LLVM, and then pass that over to rust, so it can be called with 0 overhead?
-
-// So we need to rethink this a little. How are we actually going to use this? We will
-// probably be in a situation where the functions hx, fx are constant. Maybe it's OK
-// to have some kind of factory that outputs rust functions or closures? Let's think
-// what kind of things we would need anyway. Maybe there are some good examples of
-// these functions in filterpy. Let's write them down.
-
-// No that's to complicated. I think that it's simply more realistic to define the
-// problem in rust and export it. It would be cool to have a 'slow' mode with pure
-// Python, but I'm not sure that's worth it. I think a realistic use case is to assume
-// that measurements are coming in in Python, and we just want to process them real
-// fast. Also we will have a lot of parallel observations (like with a skeleton
-// tracker), so we can pass a fairly big array to rust and process it in parallel.
-
-// What we need to do is to make a Python wrapper for UnscentedKalmanFilter. This is going
-// to be a struct with a single object. We can then implement ::new methods in specific use cases.
-
-// On the other hand, we should allow for closures over function pointers anyway in our
-// design, and returing PyResult should be a zero-cost abstraction. So maybe we should
-// just do that.
-
-// NEW TODO:
-// Refactor so that the ::new() command needs a copy of Wm and Wc; perhaps we can make
-// a 'SigmaPointsContainer' struct that just defines that.
-// The only place that we actually need sigma_points.sigma_points is in 'compute_process_sigmas', in the predict method.
-// We should then go for a function approach. MerweSigmaPoints is actually stateless,
-// So we can pass in a closure instead. This would have signature
-// Fn(SigmaPointsContainer, ArrayView1<Float>, ArrayView2<Float>) -> Result<Array2<Float>, Box<dyn Error>>
