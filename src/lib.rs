@@ -3,6 +3,7 @@
 pub mod ring_buffer;
 pub mod sigma_points;
 pub mod unscented_kalman_filter;
+pub mod linalg_utils;
 
 pub mod types;
 pub use types::Float;

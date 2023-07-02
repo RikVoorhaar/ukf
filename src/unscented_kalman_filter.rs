@@ -1,12 +1,12 @@
 use log::debug;
 use ndarray::{Array1, Array2, ArrayView1, Axis};
-use ndarray_linalg::{FactorizeHInto, SolveH};
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1};
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::{pyclass, pymethods};
 use std::{error::Error, sync::Arc};
 
+use crate::linalg_utils::{right_solve_h, smallest_eigenvalue};
 use crate::sigma_points::SigmaPoints;
 use crate::Float;
 
@@ -29,7 +29,7 @@ impl HybridTransitionFunction {
                     let result_py: &PyArray1<Float> =
                         result_py.downcast(py).map_err(|_| {
                             PyValueError::new_err("Could not downcast result to PyArray1. \
-                                Make sure return type is 1-dimensional numpy array of the right dtype.")
+                           k    Make sure return type is 1-dimensional numpy array of the right dtype.")
                         })?;
 
                     let result = result_py.to_owned_array();
@@ -143,6 +143,7 @@ impl UnscentedKalmanFilter {
         sigmas: &Array2<Float>,
         noise_cov: Option<&Array2<Float>>,
     ) -> (Array1<Float>, Array2<Float>) {
+        debug!("ut");
         let x: Array1<Float> = self.sigma_points.get_Wm().dot(&sigmas.t());
 
         let y = sigmas - x.clone().insert_axis(Axis(1));
@@ -159,6 +160,7 @@ impl UnscentedKalmanFilter {
     }
 
     fn compute_process_sigmas(&mut self, dt: Float) -> Result<(), Box<dyn Error>> {
+        debug!("process sigmas");
         let sigmas = self.sigma_points.call(self.x.view(), self.P.view())?;
 
         for (col_sigmas, mut col_sigmas_f) in
@@ -173,9 +175,12 @@ impl UnscentedKalmanFilter {
     }
 
     pub fn predict(&mut self, dt: Float) -> Result<(), Box<dyn Error>> {
+        debug!("predict");
         self.compute_process_sigmas(dt)?;
 
         let (x, P) = self.unscented_transform(&self.sigmas_f, Some(&self.Q));
+        debug!("self.P smallest eigval: {}", smallest_eigenvalue(&self.P));
+        debug!("P smallest eigval: {}", smallest_eigenvalue(&P));
 
         self.x_prior = x.clone();
         self.P_prior = P.clone();
@@ -190,41 +195,61 @@ impl UnscentedKalmanFilter {
         x: ArrayView1<Float>,
         z: ArrayView1<Float>,
     ) -> Array2<Float> {
+        debug!("cross variance");
         let Wc = self.sigma_points.get_Wc();
 
         let mut L = &self.sigmas_f - x.insert_axis(Axis(1)).to_owned();
 
+        debug!("Shape of L: {:?}", L.shape());
+        debug!("L before\n{:?}", L);
+        debug!("Shape of Wc: {:?}", Wc.shape());
+        // for k in 0..self.sigma_points.n_points() {
+        //     L.column_mut(k).mapv_inplace(|v| v * Wc[k]);
+        // }
+        debug!("n_points= {:?}", self.sigma_points.n_points());
         for k in 0..self.sigma_points.n_points() {
-            L.row_mut(k).mapv_inplace(|v| v * Wc[k]);
+            let mut col = L.column_mut(k);
+            col *= Wc[k];
         }
+        debug!("L after\n{:?}", L);
         let R = &self.sigmas_h - z.insert_axis(Axis(1)).to_owned();
+        debug!("Shape of R: {:?}", R.shape());
+        debug!("R after\n{:?}", R);
 
         L.dot(&R.t())
     }
 
     pub fn update(&mut self, z: ArrayView1<Float>) -> Result<(), Box<dyn Error>> {
+        debug!("update");
         for i in 0..self.sigma_points.n_points() {
             let new_column = self.hx.call(self.sigmas_f.column(i))?;
             self.sigmas_h.column_mut(i).assign(&new_column);
         }
 
         let (z_pred, S) = self.unscented_transform(&self.sigmas_h, Some(&self.R));
-        let mut Pxz = self.cross_variance(self.x.view(), z_pred.view());
-        self.S = S.clone();
-
-        // Right Hermitian solve consuming S and Pxz into K
-        let S_factor = S.factorizeh_into().unwrap();
-        Pxz.outer_iter_mut()
-            .zip(self.K.rows_mut())
-            .for_each(|(row_Pxz, mut row_K)| {
-                row_K.assign(&S_factor.solveh_into(row_Pxz).unwrap())
-            });
+        let Pxz = self.cross_variance(self.x.view(), z_pred.view());
+        debug!("self.K before:\n{}", &self.K);
+        self.K = right_solve_h(&Pxz, S.clone());
+        self.S = S;
+        debug!("self.S after:\n{}", &self.S);
+        debug!("self.K after:\n{}", &self.K);
+        debug!("Pxz:\n{}", Pxz);
+        debug!("self.K . dot( self.S ):\n{}", self.K.dot(&self.S));
 
         self.z = z.to_owned();
         self.y = z.to_owned() - z_pred;
 
         self.x += &self.K.dot(&self.y);
+        debug!(
+            "self.P smallest eigenval before: {}",
+            smallest_eigenvalue(&self.P)
+        );
+        // FIXME: This is incorrect; It breaks the positve definiteness of P
         self.P -= &self.K.dot(&self.S.dot(&self.K.t()));
+        debug!(
+            "self.P smallest eigenval after: {}",
+            smallest_eigenvalue(&self.P)
+        );
 
         self.x_post = self.x.clone();
         self.P_post = self.P.clone();
@@ -233,6 +258,7 @@ impl UnscentedKalmanFilter {
     }
 }
 
+type UnscentedTransformResult = (Py<PyArray1<Float>>, Py<PyArray2<Float>>);
 #[pymethods]
 impl UnscentedKalmanFilter {
     #[new]
@@ -275,6 +301,36 @@ impl UnscentedKalmanFilter {
         })
     }
 
+    #[pyo3(name = "cross_variance")]
+    fn py_cross_variance(
+        &self,
+        py: Python<'_>,
+        x: PyReadonlyArray1<Float>,
+        z: PyReadonlyArray1<Float>,
+    ) -> PyResult<Py<PyArray2<Float>>> {
+        let x = x.as_array();
+        let z = z.as_array();
+        let result = self.cross_variance(x, z);
+        let result = result.into_pyarray(py).to_owned();
+        Ok(result)
+    }
+
+    #[pyo3(name = "unscented_transform")]
+    fn py_unscented_transform(
+        &self,
+        py: Python<'_>,
+        sigmas: &PyAny,
+        additive: Option<PyReadonlyArray2<Float>>,
+    ) -> PyResult<UnscentedTransformResult> {
+        let sigmas = sigmas.extract::<PyReadonlyArray2<Float>>()?;
+        let additive = additive.map(|a| a.as_array().to_owned());
+        let (x, P) =
+            self.unscented_transform(&sigmas.as_array().to_owned(), additive.as_ref());
+        let x = x.into_pyarray(py).to_owned();
+        let P = P.into_pyarray(py).to_owned();
+        Ok((x, P))
+    }
+
     #[getter]
     #[pyo3(name = "x")]
     fn py_get_x(&self, py: Python<'_>) -> PyResult<Py<PyArray1<Float>>> {
@@ -282,10 +338,52 @@ impl UnscentedKalmanFilter {
         Ok(array)
     }
 
+    #[setter]
+    #[pyo3(name = "x")]
+    fn py_set_x(&mut self, x: PyReadonlyArray1<Float>) -> PyResult<()> {
+        self.x = x.as_array().to_owned();
+        Ok(())
+    }
+
     #[getter]
     #[pyo3(name = "P")]
     fn py_get_P(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
         let array = self.P.clone().into_pyarray(py).to_owned();
+        Ok(array)
+    }
+
+    #[setter]
+    #[pyo3(name = "P")]
+    fn py_set_P(&mut self, P: PyReadonlyArray2<Float>) -> PyResult<()> {
+        self.P = P.as_array().to_owned();
+        Ok(())
+    }
+
+    #[getter]
+    #[pyo3(name = "x_prior")]
+    fn py_get_x_prior(&self, py: Python<'_>) -> PyResult<Py<PyArray1<Float>>> {
+        let array = self.x_prior.clone().into_pyarray(py).to_owned();
+        Ok(array)
+    }
+
+    #[getter]
+    #[pyo3(name = "P_prior")]
+    fn py_get_P_prior(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
+        let array = self.P_prior.clone().into_pyarray(py).to_owned();
+        Ok(array)
+    }
+
+    #[getter]
+    #[pyo3(name = "x_post")]
+    fn py_get_x_post(&self, py: Python<'_>) -> PyResult<Py<PyArray1<Float>>> {
+        let array = self.x_post.clone().into_pyarray(py).to_owned();
+        Ok(array)
+    }
+
+    #[getter]
+    #[pyo3(name = "P_post")]
+    fn py_get_P_post(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
+        let array = self.P_post.clone().into_pyarray(py).to_owned();
         Ok(array)
     }
 
@@ -346,6 +444,20 @@ impl UnscentedKalmanFilter {
     #[pyo3(name = "S")]
     fn py_get_S(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
         let array = self.S.clone().into_pyarray(py).to_owned();
+        Ok(array)
+    }
+
+    #[getter]
+    #[pyo3(name = "sigmas_f")]
+    fn py_get_sigmas_f(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
+        let array = self.sigmas_f.clone().into_pyarray(py).to_owned();
+        Ok(array)
+    }
+
+    #[getter]
+    #[pyo3(name = "sigmas_h")]
+    fn py_get_sigmas_h(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
+        let array = self.sigmas_h.clone().into_pyarray(py).to_owned();
         Ok(array)
     }
 }

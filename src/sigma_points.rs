@@ -1,4 +1,5 @@
 use crate::Float;
+use log::debug;
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use ndarray_linalg::cholesky::{Cholesky, UPLO};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
@@ -9,6 +10,7 @@ use std::{error::Error, sync::Arc};
 #[pyclass]
 #[derive(Clone)]
 pub struct SigmaPointsContainer {
+    n_points: usize,
     size: usize,
     Wm: Array1<Float>,
     Wc: Array1<Float>,
@@ -49,26 +51,25 @@ impl SigmaPoints {
     }
 
     pub fn n_points(&self) -> usize {
+        self.container.n_points
+    }
+
+    pub fn size(&self) -> usize {
         self.container.size
     }
 }
 
 impl SigmaPoints {
-    pub fn merwe(
-        size: usize,
-        lambda: Float,
-        alpha: Float,
-        beta: Float,
-        kappa: Float,
-    ) -> Self {
+    pub fn merwe(size: usize, alpha: Float, beta: Float, kappa: Float) -> Self {
         let n: Float = size as Float;
-        let l: Float = alpha * alpha * (n + kappa) - n;
-        let c = 0.5 / (n + l);
+        let lambda: Float = alpha * alpha * (n + kappa) - n;
+        let c = 0.5 / (n + lambda);
 
-        let mut Wc: Array1<Float> = Array1::from_elem(size * 2 + 1, c);
-        Wc[0] = l / (n + l) + (1.0 - alpha * alpha + beta);
-        let mut Wm: Array1<Float> = Array1::from_elem(size * 2 + 1, c);
-        Wm[0] = l / (n + l);
+        let n_points = size * 2 + 1;
+        let mut Wc: Array1<Float> = Array1::from_elem(n_points, c);
+        Wc[0] = lambda / (n + lambda) + (1.0 - alpha * alpha + beta);
+        let mut Wm: Array1<Float> = Array1::from_elem(n_points, c);
+        Wm[0] = lambda / (n + lambda);
 
         let f_inner = move |container: &SigmaPointsContainer,
                             x: ArrayView1<Float>,
@@ -83,11 +84,15 @@ impl SigmaPoints {
 
             let n: Float = container.size as Float;
 
-            let U: Array2<Float> =
-                ((lambda + n) * P.to_owned()).cholesky(UPLO::Upper)?;
+            debug!("computing Cholesky");
+
+            let U: Array2<Float> = (lambda + n) * P.to_owned();
+            debug!("U: {:?}", U);
+            let U: Array2<Float> = (U).cholesky(UPLO::Upper)?;
+            debug!("Computed Cholesky");
 
             let mut sigmas: Array2<Float> =
-                Array2::zeros((2 * container.size + 1, container.size));
+                Array2::zeros((container.n_points, container.size));
             sigmas.row_mut(0).assign(&x.to_owned());
 
             for k in 0..container.size {
@@ -102,7 +107,12 @@ impl SigmaPoints {
 
         SigmaPoints {
             f,
-            container: SigmaPointsContainer { size, Wm, Wc },
+            container: SigmaPointsContainer {
+                n_points,
+                size,
+                Wm,
+                Wc,
+            },
         }
     }
 }
@@ -149,7 +159,7 @@ impl SigmaPoints {
         beta: Float,
         kappa: Float,
     ) -> PyResult<Self> {
-        let sigma_point_gen = SigmaPoints::merwe(n, alpha, beta, kappa, 0.0);
+        let sigma_point_gen = SigmaPoints::merwe(n, alpha, beta, kappa);
         Ok(sigma_point_gen)
     }
 }
@@ -163,7 +173,7 @@ mod tests {
     fn test_merwe_sigma_points() {
         let n = 2;
 
-        let sigma_point_gen = SigmaPoints::merwe(n, 1e-4, 1.0, 2.0, 0.0);
+        let sigma_point_gen = SigmaPoints::merwe(n, 1.0, 2.0, 0.0);
 
         let x = Array1::from_iter(0..n).map(|x| *x as Float);
         let P = Array2::from_diag(&Array1::from_iter((1..=n).map(|x| x as Float)));
