@@ -159,6 +159,7 @@ impl UnscentedKalmanFilter {
         (x, P)
     }
 
+    // TODO: Make this use an immutable self and a return value instead
     fn compute_process_sigmas(&mut self, dt: Float) -> Result<(), Box<dyn Error>> {
         debug!("process sigmas");
         let sigmas = self.sigma_points.call(self.x.view(), self.P.view())?;
@@ -237,14 +238,13 @@ impl UnscentedKalmanFilter {
         debug!("self.K . dot( self.S ):\n{}", self.K.dot(&self.S));
 
         self.z = z.to_owned();
-        self.y = z.to_owned() - z_pred;
+        self.y = z.to_owned() - z_pred;  // TODO: Remove this from the struct
 
         self.x += &self.K.dot(&self.y);
         debug!(
             "self.P smallest eigenval before: {}",
             smallest_eigenvalue(&self.P)
         );
-        // FIXME: This is incorrect; It breaks the positve definiteness of P
         self.P -= &self.K.dot(&self.S.dot(&self.K.t()));
         debug!(
             "self.P smallest eigenval after: {}",
