@@ -6,9 +6,11 @@ use pyo3::prelude::*;
 use pyo3::{pyclass, pymethods};
 use std::{error::Error, sync::Arc};
 
+use crate::dynamic_functions::PythonMeasurementFunction;
 use crate::linalg_utils::{right_solve_h, smallest_eigenvalue};
 use crate::sigma_points::SigmaPoints;
 use crate::Float;
+use crate::MeasurementFunction;
 
 pub type RustTranstionFunction =
     Arc<dyn Fn(ArrayView1<Float>, Float) -> PyResult<Array1<Float>> + Send + Sync>;
@@ -40,34 +42,34 @@ impl HybridTransitionFunction {
     }
 }
 
-pub type RustMeasurementFunction =
-    Arc<dyn Fn(ArrayView1<Float>) -> PyResult<Array1<Float>> + Send + Sync>;
+// pub type RustMeasurementFunction =
+//     Arc<dyn Fn(ArrayView1<Float>) -> PyResult<Array1<Float>> + Send + Sync>;
 
-pub enum HybridMeasurementFunction {
-    Rust(RustMeasurementFunction),
-    Python(PyObject),
-}
+// pub enum HybridMeasurementFunction {
+//     Rust(RustMeasurementFunction),
+//     Python(PyObject),
+// }
 
-impl HybridMeasurementFunction {
-    pub fn call(&self, x: ArrayView1<Float>) -> PyResult<Array1<Float>> {
-        match self {
-            HybridMeasurementFunction::Rust(h) => h(x),
-            HybridMeasurementFunction::Python(h) => {
-                Python::with_gil(|py| -> PyResult<Array1<Float>> {
-                    let x_py = x.to_owned().into_pyarray(py);
-                    let result_py = h.call1(py, (x_py,))?;
-                    let result_py: &PyArray1<Float> =
-                        result_py.downcast(py).map_err(|_| {
-                            PyValueError::new_err("Could not downcast result to PyArray1. \
-                                Make sure return type is 1-dimensional numpy array of the right dtype.")
-                        })?;
-                    let result = result_py.to_owned_array();
-                    Ok(result)
-                })
-            }
-        }
-    }
-}
+// impl HybridMeasurementFunction {
+//     pub fn call(&self, x: ArrayView1<Float>) -> PyResult<Array1<Float>> {
+//         match self {
+//             HybridMeasurementFunction::Rust(h) => h(x),
+//             HybridMeasurementFunction::Python(h) => {
+//                 Python::with_gil(|py| -> PyResult<Array1<Float>> {
+//                     let x_py = x.to_owned().into_pyarray(py);
+//                     let result_py = h.call1(py, (x_py,))?;
+//                     let result_py: &PyArray1<Float> =
+//                         result_py.downcast(py).map_err(|_| {
+//                             PyValueError::new_err("Could not downcast result to PyArray1. \
+//                                 Make sure return type is 1-dimensional numpy array of the right dtype.")
+//                         })?;
+//                     let result = result_py.to_owned_array();
+//                     Ok(result)
+//                 })
+//             }
+//         }
+//     }
+// }
 
 #[pyclass]
 pub struct UnscentedKalmanFilter {
@@ -82,7 +84,7 @@ pub struct UnscentedKalmanFilter {
     sigma_points: SigmaPoints,
     pub dim_x: usize,
     pub dim_z: usize,
-    hx: HybridMeasurementFunction,
+    hx: Box<dyn MeasurementFunction>,
     fx: HybridTransitionFunction,
     sigmas_f: Array2<Float>,
     sigmas_h: Array2<Float>,
@@ -96,7 +98,7 @@ impl UnscentedKalmanFilter {
     pub fn new(
         dim_x: usize,
         dim_z: usize,
-        hx: HybridMeasurementFunction,
+        hx: Box<dyn MeasurementFunction>,
         fx: HybridTransitionFunction,
         sigma_points: SigmaPoints,
     ) -> Self {
@@ -238,7 +240,7 @@ impl UnscentedKalmanFilter {
         debug!("self.K . dot( self.S ):\n{}", self.K.dot(&self.S));
 
         self.z = z.to_owned();
-        self.y = z.to_owned() - z_pred;  // TODO: Remove this from the struct
+        self.y = z.to_owned() - z_pred; // TODO: Remove this from the struct
 
         self.x += &self.K.dot(&self.y);
         debug!(
@@ -265,7 +267,7 @@ impl UnscentedKalmanFilter {
     fn py_new(
         dim_x: usize,
         dim_z: usize,
-        hx: PyObject,
+        hx: PythonMeasurementFunction,
         fx: PyObject,
         sigma_points: &PyAny,
     ) -> PyResult<Self> {
@@ -274,7 +276,7 @@ impl UnscentedKalmanFilter {
         Ok(Self::new(
             dim_x,
             dim_z,
-            HybridMeasurementFunction::Python(hx),
+            Box::new(hx),
             HybridTransitionFunction::Python(fx),
             sigma_points_rust,
         ))

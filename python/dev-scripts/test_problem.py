@@ -12,7 +12,7 @@ fov value.
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-from ukf import UnscentedKalmanFilter, SigmaPoints
+from ukf import UnscentedKalmanFilter, SigmaPoints, MeasurementFunction
 
 
 class PerspectiveCamera:
@@ -121,16 +121,22 @@ plt.show()
 # %%
 
 dim_x = 3
-dim_z = 3
+dim_z = 2
 
 
-def hx(x: np.ndarray) -> np.ndarray:
-    pos = x[:2]
-    cam_id = x[2]
+contexts = []
+
+
+def hx(x: np.ndarray, cam_id: int) -> np.ndarray:
     if cam_id == 0:
-        return cam1.project(pos.reshape(1, 3)).reshape(3)
+        return cam1.project(x.reshape(1, 3)).reshape(2)
+    elif cam_id == 1:
+        return cam2.project(x.reshape(1, 3)).reshape(2)
     else:
-        return cam2.project(pos.reshape(1, 3)).reshape(3)
+        return np.zeros(2, dtype=np.float32)
+
+
+h = MeasurementFunction(hx, [])
 
 
 def fx(x: np.ndarray, dt: float) -> np.ndarray:
@@ -138,13 +144,31 @@ def fx(x: np.ndarray, dt: float) -> np.ndarray:
 
 
 sigma_points = SigmaPoints.merwe(dim_x, 1, 2, 0)
-kalman_filter = UnscentedKalmanFilter(dim_x, dim_z, hx, fx, sigma_points)
+kalman_filter = UnscentedKalmanFilter(dim_x, dim_z, h, fx, sigma_points)
 
 predictions = []
-for p1, p2 in zip(proj_points_obs1, proj_points_obs2):
-    kalman_filter.update(np.array([p1[0], p1[1], 0], dtype=np.float32))
+for p1, p2 in zip(
+    proj_points_obs1.astype(np.float32), proj_points_obs2.astype(np.float32)
+):
+    h.context = 0
+    kalman_filter.update(p1)
     kalman_filter.predict(1.0)
     predictions.append(kalman_filter.x)
-    kalman_filter.update(np.array([p2[0], p2[1], 1]))
+
+    h.context = 1
+    kalman_filter.update(p2)
     kalman_filter.predict(1.0)
     predictions.append(kalman_filter.x)
+
+# %%
+plt.plot(*cam1.project(np.array(predictions)).reshape(-1, 2).T, ".", label="pred")
+plt.plot(*proj_points_obs1.T, ".", label="obs")
+plt.plot(*proj_points1.T, ".-", label="true")
+plt.legend()
+plt.show()
+
+plt.plot(*cam2.project(np.array(predictions)).reshape(-1, 2).T, ".", label="pred")
+plt.plot(*proj_points_obs2.T, ".", label="obs")
+plt.plot(*proj_points2.T, ".-", label="true")
+plt.legend()
+plt.show()
