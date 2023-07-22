@@ -2,11 +2,19 @@
 requires = ["setuptools", "wheel", "maturin"]
 build-backend = "maturin"
 
-
 [project]
 name = "ukf"
 version = "0.0.1"
-dependencies = ["numpy", "filterpy", "matplotlib", "wheel", "maturin", "numba"]
+dependencies = [
+    "opencv-python",
+    "filterpy",
+    "matplotlib",
+    "maturin",
+    "numba",
+    "numpy",
+    "wheel",
+]
 
 [project.optional-dependencies]
 dev = ["pytest", "black", "ruff", "jupyter", "mypy"]
+test = ["pytest"]

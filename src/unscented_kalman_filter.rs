@@ -51,11 +51,11 @@ pub enum HybridMeasurementFunction {
 impl HybridMeasurementFunction {
     pub fn call(&self, x: ArrayView1<Float>) -> PyResult<Array1<Float>> {
         match self {
-            HybridMeasurementFunction::Rust(f) => f(x),
-            HybridMeasurementFunction::Python(f) => {
+            HybridMeasurementFunction::Rust(h) => h(x),
+            HybridMeasurementFunction::Python(h) => {
                 Python::with_gil(|py| -> PyResult<Array1<Float>> {
                     let x_py = x.to_owned().into_pyarray(py);
-                    let result_py = f.call1(py, (x_py,))?;
+                    let result_py = h.call1(py, (x_py,))?;
                     let result_py: &PyArray1<Float> =
                         result_py.downcast(py).map_err(|_| {
                             PyValueError::new_err("Could not downcast result to PyArray1. \
