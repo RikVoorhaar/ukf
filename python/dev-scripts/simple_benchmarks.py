@@ -1,7 +1,7 @@
 # %%
 from filterpy.kalman.sigma_points import MerweScaledSigmaPoints
 from filterpy.kalman.UKF import UnscentedKalmanFilter as UKF_Py
-from ukf import UnscentedKalmanFilter, SigmaPoints, constant_speed_ukf
+from ukf_pyrs import UnscentedKalmanFilter, SigmaPoints, constant_speed_ukf
 from numba import jit
 import numpy as np
 from time import perf_counter

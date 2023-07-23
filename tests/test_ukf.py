@@ -1,9 +1,8 @@
 # %%
 import pytest
 from filterpy.kalman.sigma_points import MerweScaledSigmaPoints
-import filterpy.kalman.UKF
 from filterpy.kalman.UKF import UnscentedKalmanFilter as UKF_Py
-from ukf import UnscentedKalmanFilter, SigmaPoints, MeasurementFunction
+from ukf_pyrs import UKF, SigmaPoints, measurement_function, transition_function
 import numpy as np
 import logging
 
@@ -16,7 +15,7 @@ def relative_error(a: np.ndarray, b: np.ndarray, rtol: float = 1e-4) -> float:
 
 def compare_kalman_filters(
     kf_py: UKF_Py,
-    kf_rs: UnscentedKalmanFilter,
+    kf_rs: UKF,
 ):
     errors = {
         "x": relative_error(kf_py.x, kf_rs.x),
@@ -33,7 +32,7 @@ def compare_kalman_filters(
 
 
 class CombinedFilter:
-    def __init__(self, ukf_rs: UnscentedKalmanFilter, ukf_py: UKF_Py) -> None:
+    def __init__(self, ukf_rs: UKF, ukf_py: UKF_Py) -> None:
         self.ukf_rs = ukf_rs
         self.ukf_py = ukf_py
 
@@ -61,7 +60,7 @@ class CombinedFilter:
 def test_constant_speed_model(dim_z, alpha, beta, kappa):
     dim_x = dim_z * 2
 
-    def hx(x: np.ndarray, context=None) -> np.ndarray:
+    def hx(x: np.ndarray) -> np.ndarray:
         if x.shape != (dim_x,):
             raise ValueError("x must have shape (dim_x,)")
 
@@ -78,12 +77,10 @@ def test_constant_speed_model(dim_z, alpha, beta, kappa):
 
     sigma_points_py = MerweScaledSigmaPoints(dim_x, alpha, beta, kappa)
     sigma_points_rs = SigmaPoints.merwe(dim_x, alpha, beta, kappa)
-    kalman_filter_rs = UnscentedKalmanFilter(
-        dim_x, dim_z, MeasurementFunction(hx, None), fx, sigma_points_rs
+    kalman_filter_rs = UKF(
+        dim_x, dim_z, measurement_function(hx), transition_function(fx), sigma_points_rs
     )
-    kalman_filter_py = filterpy.kalman.UKF.UnscentedKalmanFilter(
-        dim_x, dim_z, 1.0, hx, fx, sigma_points_py
-    )
+    kalman_filter_py = UKF_Py(dim_x, dim_z, 1.0, hx, fx, sigma_points_py)
     ukf_comb = CombinedFilter(kalman_filter_rs, kalman_filter_py)
 
     for _ in range(10):
@@ -119,13 +116,11 @@ def test_random_matrix_model(dim_z, dim_x, alpha, beta, kappa):
 
         return (F_mat @ x).astype(np.float32)
 
-    kalman_filter_rs = UnscentedKalmanFilter(
-        dim_x, dim_z, MeasurementFunction(hx, None), fx, sigma_points
+    kalman_filter_rs = UKF(
+        dim_x, dim_z, measurement_function(hx), transition_function(fx), sigma_points
     )
     sigma_points_py = MerweScaledSigmaPoints(dim_x, alpha, beta, kappa)
-    kalman_filter_py = filterpy.kalman.UKF.UnscentedKalmanFilter(
-        dim_x, dim_z, 1.0, hx, fx, sigma_points_py
-    )
+    kalman_filter_py = UKF_Py(dim_x, dim_z, 1.0, hx, fx, sigma_points_py)
     ukf_comb = CombinedFilter(kalman_filter_rs, kalman_filter_py)
 
     for _ in range(10):

@@ -14,7 +14,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from filterpy.common import Q_discrete_white_noise
 from scipy.ndimage import gaussian_filter1d
-from ukf import UnscentedKalmanFilter, SigmaPoints, MeasurementFunction
+from ukf_pyrs import UKF, SigmaPoints, measurement_function, transition_function
 
 
 class PerspectiveCamera:
@@ -51,9 +51,7 @@ class PerspectiveCamera:
 
         up = np.array([0, 1, 0], dtype=np.float32)
         rot = rotation_from_lookat(camera_position, lookat_target, up)
-        camera_matrix = camera_matrix_from_fov_resolution(
-            fov_x_degrees, np.array([640, 480])
-        )
+        camera_matrix = camera_matrix_from_fov_resolution(fov_x_degrees, resolution)
 
         return cls(
             rotation_rodrigues=rot,
@@ -94,7 +92,7 @@ point_c = np.array([10, -10, 10]) * 2
 t = np.linspace(0, 1, 50)
 dt = t[1] - t[0]
 points = (1 - t)[:, None] * point_a[None, :] + t[:, None] * point_b[None, :]
-points += (np.cos(t * 2*np.pi) ** 2)[:, None] * point_c[None, :]
+points += (np.cos(t * np.pi) ** 2)[:, None] * point_c[None, :]
 points = points.astype(np.float32)
 np.random.seed(0)
 rand_scale = 1
@@ -131,6 +129,7 @@ dim_x = 3
 dim_z = 2
 
 
+@measurement_function
 def hx(x: np.ndarray, cam_id: int) -> np.ndarray:
     if cam_id == 0:
         return cam1.project(x.reshape(1, 3)).reshape(2)
@@ -140,15 +139,13 @@ def hx(x: np.ndarray, cam_id: int) -> np.ndarray:
         return np.zeros(2, dtype=np.float32)
 
 
-h = MeasurementFunction(hx, [])
-
-
+@transition_function
 def fx(x: np.ndarray, dt: float) -> np.ndarray:
     return x
 
 
 sigma_points = SigmaPoints.merwe(dim_x, 0.5, 2, 0)
-kalman_filter = UnscentedKalmanFilter(dim_x, dim_z, h, fx, sigma_points)
+kalman_filter = UKF(dim_x, dim_z, hx, fx, sigma_points)
 
 kalman_filter.Q *= 1e2
 kalman_filter.R *= 1
@@ -157,12 +154,12 @@ predictions_list = []
 for p1, p2 in zip(
     proj_points_obs1.astype(np.float32), proj_points_obs2.astype(np.float32)
 ):
-    h.context = 0
+    hx.context = 0
     kalman_filter.update(p1)
     kalman_filter.predict(dt)
     predictions_list.append(kalman_filter.x)
 
-    h.context = 1
+    hx.context = 1
     kalman_filter.update(p2)
     kalman_filter.predict(dt)
     predictions_list.append(kalman_filter.x)
@@ -227,6 +224,7 @@ float_type = np.float32
 contexts = []
 
 
+@measurement_function
 def hx_first_order(x: np.ndarray, cam_id: int) -> np.ndarray:
     contexts.append(cam_id)
     x = x.astype(float_type)
@@ -239,9 +237,7 @@ def hx_first_order(x: np.ndarray, cam_id: int) -> np.ndarray:
         return np.zeros(2, dtype=float_type)
 
 
-h_first_order = MeasurementFunction(hx_first_order, 0)
-
-
+@transition_function
 def fx_first_order(x: np.ndarray, dt: float) -> np.ndarray:
     pos = x[:3]
     vel = x[3:]
@@ -249,9 +245,7 @@ def fx_first_order(x: np.ndarray, dt: float) -> np.ndarray:
 
 
 sigma_points = SigmaPoints.merwe(dim_x, 0.5, 2, -2)
-kalman_filter = UnscentedKalmanFilter(
-    dim_x, dim_z, h_first_order, fx_first_order, sigma_points
-)
+kalman_filter = UKF(dim_x, dim_z, hx_first_order, fx_first_order, sigma_points)
 
 
 # kalman_filter.Q = Q_discrete_white_noise(
@@ -265,12 +259,12 @@ predictions_list = []
 for p1, p2 in zip(
     proj_points_obs1.astype(float_type), proj_points_obs2.astype(float_type)
 ):
-    h_first_order.context = 0
+    hx_first_order.context = 0
     kalman_filter.predict(dt)
     kalman_filter.update(p1)
     predictions_list.append(kalman_filter.x)
 
-    h_first_order.context = 1
+    hx_first_order.context = 1
     kalman_filter.predict(dt)
     kalman_filter.update(p2)
     predictions_list.append(kalman_filter.x)
@@ -327,9 +321,3 @@ for i, v in enumerate(velocity.T):
 plt.legend()
 plt.show()
 
-# %%
-
-kalman_filter.Q = Q_discrete_white_noise(
-    2, dt=dt, var=1, block_size=3, order_by_dim=False
-).astype(np.float32)
-plt.matshow(kalman_filter.Q)

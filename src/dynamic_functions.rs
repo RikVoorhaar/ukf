@@ -8,20 +8,6 @@ use pyo3::{pyclass, pymethods};
 
 use crate::Float;
 
-pub trait MeasurementFunction: Send {
-    fn call(&self, x: ArrayView1<Float>) -> PyResult<Array1<Float>>;
-
-    fn py_call(
-        &self,
-        py: Python<'_>,
-        x: PyReadonlyArray1<Float>,
-    ) -> PyResult<Py<PyArray1<Float>>> {
-        let x = x.as_array();
-        let result = self.call(x)?;
-        Ok(result.into_pyarray(py).to_owned())
-    }
-}
-
 #[pyclass]
 pub struct ContextContainer {
     pub context: PyObject,
@@ -40,6 +26,22 @@ impl Clone for ContextContainer {
             Ok(Self { context })
         })
         .unwrap()
+    }
+}
+// -------------------------------------------------------------------------------------
+// Measurement function
+// -------------------------------------------------------------------------------------
+pub trait MeasurementFunction: Send {
+    fn call(&self, x: ArrayView1<Float>) -> PyResult<Array1<Float>>;
+
+    fn py_call(
+        &self,
+        py: Python<'_>,
+        x: PyReadonlyArray1<Float>,
+    ) -> PyResult<Py<PyArray1<Float>>> {
+        let x = x.as_array();
+        let result = self.call(x)?;
+        Ok(result.into_pyarray(py).to_owned())
     }
 }
 
@@ -65,7 +67,13 @@ impl MeasurementFunction for PythonMeasurementFunction {
         Python::with_gil(|py| -> PyResult<Array1<Float>> {
             let x_py = x.to_owned().into_pyarray(py);
             let context_container = self.context.borrow(py);
-            let result_py = self.h.call1(py, (x_py, &context_container.context))?;
+            let context = &context_container.context;
+
+            let result_py = if context.is_none(py) {
+                self.h.call1(py, (x_py,))
+            } else {
+                self.h.call1(py, (x_py, context))
+            }?;
             let result_py: &PyArray1<Float> = result_py.downcast(py).map_err(|_| {
                 PyValueError::new_err(
                     "Could not downcast result to PyArray1. \
@@ -83,8 +91,11 @@ impl MeasurementFunction for PythonMeasurementFunction {
 #[pymethods]
 impl PythonMeasurementFunction {
     #[new]
-    pub fn new(h: PyObject, py: Python<'_>, context: PyObject) -> Self {
-        let context_container = Py::new(py, ContextContainer::new(context)).unwrap();
+    pub fn new(h: PyObject, py: Python<'_>, context: Option<PyObject>) -> Self {
+        let context_container = match context {
+            Some(context) => Py::new(py, ContextContainer::new(context)).unwrap(),
+            None => Py::new(py, ContextContainer::new(py.None())).unwrap(),
+        };
         Self {
             h,
             context: context_container,
@@ -98,6 +109,108 @@ impl PythonMeasurementFunction {
         x: PyReadonlyArray1<Float>,
     ) -> PyResult<Py<PyArray1<Float>>> {
         self.call(x.as_array())
+            .map(|result| result.into_pyarray(py).to_owned())
+    }
+
+    #[getter]
+    #[pyo3(name = "context")]
+    pub fn get_context(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let context_container = self.context.borrow(py);
+        Ok(context_container.context.clone())
+    }
+
+    #[setter]
+    #[pyo3(name = "context")]
+    pub fn set_context(&mut self, py: Python<'_>, context: PyObject) -> PyResult<()> {
+        let mut context_container = self.context.borrow_mut(py);
+        context_container.context = context;
+        Ok(())
+    }
+}
+
+// -------------------------------------------------------------------------------------
+// Transition function
+// -------------------------------------------------------------------------------------
+pub trait TransitionFunction: Send {
+    fn call(&self, x: ArrayView1<Float>, dt: Float) -> PyResult<Array1<Float>>;
+
+    fn py_call(
+        &self,
+        py: Python<'_>,
+        x: PyReadonlyArray1<Float>,
+        dt: Float,
+    ) -> PyResult<Py<PyArray1<Float>>> {
+        let x = x.as_array();
+        let result = self.call(x, dt)?;
+        Ok(result.into_pyarray(py).to_owned())
+    }
+}
+
+#[pyclass(name = "TransitionFunction")]
+pub struct PythonTransitionFunction {
+    pub f: PyObject,
+    pub context: Py<ContextContainer>,
+}
+
+impl Clone for PythonTransitionFunction {
+    fn clone(&self) -> Self {
+        Python::with_gil(|py| -> PyResult<Self> {
+            let f = self.f.clone_ref(py);
+            let context = self.context.clone_ref(py);
+            Ok(Self { f, context })
+        })
+        .unwrap()
+    }
+}
+
+impl TransitionFunction for PythonTransitionFunction {
+    fn call(&self, x: ArrayView1<Float>, dt: Float) -> PyResult<Array1<Float>> {
+        Python::with_gil(|py| -> PyResult<Array1<Float>> {
+            let x_py = x.to_owned().into_pyarray(py);
+            let context_container = self.context.borrow(py);
+            let context = &context_container.context;
+
+            let result_py = if context.is_none(py) {
+                self.f.call1(py, (x_py, dt))
+            } else {
+                self.f.call1(py, (x_py, dt, context))
+            }?;
+            let result_py: &PyArray1<Float> = result_py.downcast(py).map_err(|_| {
+                PyValueError::new_err(
+                    "Could not downcast result to PyArray1. \
+                    Make sure return type is 1-dimensional numpy array of the right \
+                    dtype.",
+                )
+            })?;
+
+            let result = result_py.to_owned_array();
+            Ok(result)
+        })
+    }
+}
+
+#[pymethods]
+impl PythonTransitionFunction {
+    #[new]
+    pub fn new(f: PyObject, py: Python<'_>, context: Option<PyObject>) -> Self {
+        let context_container = match context {
+            Some(context) => Py::new(py, ContextContainer::new(context)).unwrap(),
+            None => Py::new(py, ContextContainer::new(py.None())).unwrap(),
+        };
+        Self {
+            f,
+            context: context_container,
+        }
+    }
+
+    #[pyo3(name = "__call__")]
+    pub fn py_call(
+        &self,
+        py: Python<'_>,
+        x: PyReadonlyArray1<Float>,
+        dt: Float,
+    ) -> PyResult<Py<PyArray1<Float>>> {
+        self.call(x.as_array(), dt)
             .map(|result| result.into_pyarray(py).to_owned())
     }
 

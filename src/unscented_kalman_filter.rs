@@ -1,77 +1,20 @@
 use log::debug;
 use ndarray::{Array1, Array2, ArrayView1, Axis};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
-use pyo3::exceptions::PyValueError;
+
 use pyo3::prelude::*;
 use pyo3::{pyclass, pymethods};
-use std::{error::Error, sync::Arc};
+use std::error::Error;
 
-use crate::dynamic_functions::PythonMeasurementFunction;
+use crate::dynamic_functions::{
+    MeasurementFunction, PythonMeasurementFunction, PythonTransitionFunction,
+    TransitionFunction,
+};
 use crate::linalg_utils::{right_solve_h, smallest_eigenvalue};
 use crate::sigma_points::SigmaPoints;
 use crate::Float;
-use crate::MeasurementFunction;
 
-pub type RustTranstionFunction =
-    Arc<dyn Fn(ArrayView1<Float>, Float) -> PyResult<Array1<Float>> + Send + Sync>;
-
-pub enum HybridTransitionFunction {
-    Rust(RustTranstionFunction),
-    Python(PyObject),
-}
-
-impl HybridTransitionFunction {
-    pub fn call(&self, x: ArrayView1<Float>, dt: Float) -> PyResult<Array1<Float>> {
-        match self {
-            HybridTransitionFunction::Rust(f) => f(x, dt),
-            HybridTransitionFunction::Python(f) => {
-                Python::with_gil(|py| -> PyResult<Array1<Float>> {
-                    let x_py = x.to_owned().into_pyarray(py);
-                    let result_py = f.call1(py, (x_py, dt))?;
-                    let result_py: &PyArray1<Float> =
-                        result_py.downcast(py).map_err(|_| {
-                            PyValueError::new_err("Could not downcast result to PyArray1. \
-                           k    Make sure return type is 1-dimensional numpy array of the right dtype.")
-                        })?;
-
-                    let result = result_py.to_owned_array();
-                    Ok(result)
-                })
-            }
-        }
-    }
-}
-
-// pub type RustMeasurementFunction =
-//     Arc<dyn Fn(ArrayView1<Float>) -> PyResult<Array1<Float>> + Send + Sync>;
-
-// pub enum HybridMeasurementFunction {
-//     Rust(RustMeasurementFunction),
-//     Python(PyObject),
-// }
-
-// impl HybridMeasurementFunction {
-//     pub fn call(&self, x: ArrayView1<Float>) -> PyResult<Array1<Float>> {
-//         match self {
-//             HybridMeasurementFunction::Rust(h) => h(x),
-//             HybridMeasurementFunction::Python(h) => {
-//                 Python::with_gil(|py| -> PyResult<Array1<Float>> {
-//                     let x_py = x.to_owned().into_pyarray(py);
-//                     let result_py = h.call1(py, (x_py,))?;
-//                     let result_py: &PyArray1<Float> =
-//                         result_py.downcast(py).map_err(|_| {
-//                             PyValueError::new_err("Could not downcast result to PyArray1. \
-//                                 Make sure return type is 1-dimensional numpy array of the right dtype.")
-//                         })?;
-//                     let result = result_py.to_owned_array();
-//                     Ok(result)
-//                 })
-//             }
-//         }
-//     }
-// }
-
-#[pyclass]
+#[pyclass(name = "UKF")]
 pub struct UnscentedKalmanFilter {
     pub x: Array1<Float>,
     pub P: Array2<Float>,
@@ -85,7 +28,7 @@ pub struct UnscentedKalmanFilter {
     pub dim_x: usize,
     pub dim_z: usize,
     hx: Box<dyn MeasurementFunction>,
-    fx: HybridTransitionFunction,
+    fx: Box<dyn TransitionFunction>,
     sigmas_f: Array2<Float>,
     sigmas_h: Array2<Float>,
     pub K: Array2<Float>,
@@ -99,7 +42,7 @@ impl UnscentedKalmanFilter {
         dim_x: usize,
         dim_z: usize,
         hx: Box<dyn MeasurementFunction>,
-        fx: HybridTransitionFunction,
+        fx: Box<dyn TransitionFunction>,
         sigma_points: SigmaPoints,
     ) -> Self {
         let x: Array1<Float> = Array1::zeros(dim_x);
@@ -268,7 +211,7 @@ impl UnscentedKalmanFilter {
         dim_x: usize,
         dim_z: usize,
         hx: PythonMeasurementFunction,
-        fx: PyObject,
+        fx: PythonTransitionFunction,
         sigma_points: &PyAny,
     ) -> PyResult<Self> {
         let sigma_points_rust = sigma_points.extract::<SigmaPoints>()?;
@@ -277,7 +220,7 @@ impl UnscentedKalmanFilter {
             dim_x,
             dim_z,
             Box::new(hx),
-            HybridTransitionFunction::Python(fx),
+            Box::new(fx),
             sigma_points_rust,
         ))
     }

@@ -10,16 +10,13 @@ pub mod unscented_kalman_filter;
 pub mod types;
 pub use types::Float;
 
-use dynamic_functions::{MeasurementFunction, PythonMeasurementFunction};
-// use examples::constant_speed_ukf;
+use dynamic_functions::{PythonMeasurementFunction, PythonTransitionFunction};
 use pyo3::prelude::*;
 use sigma_points::SigmaPoints;
 use unscented_kalman_filter::UnscentedKalmanFilter;
 
-
-
 #[pymodule]
-fn ukf(_py: Python, m: &PyModule) -> PyResult<()> {
+fn ukf_pyrs(_py: Python, m: &PyModule) -> PyResult<()> {
     std::env::set_var("RUST_BACKTRACE", "full");
 
     pyo3_log::init();
@@ -27,6 +24,7 @@ fn ukf(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<SigmaPoints>()?;
     m.add_class::<UnscentedKalmanFilter>()?;
     m.add_class::<PythonMeasurementFunction>()?;
+    m.add_class::<PythonTransitionFunction>()?;
     // m.add_function(wrap_pyfunction!(constant_speed_ukf, m)?)?;
 
     Ok(())

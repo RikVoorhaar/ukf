@@ -3,8 +3,8 @@ requires = ["setuptools", "wheel", "maturin"]
 build-backend = "maturin"
 
 [project]
-name = "ukf"
-version = "0.0.1"
+name = "ukf_pyrs"
+version = "0.1.0"
 dependencies = [
     "opencv-python",
     "filterpy",
