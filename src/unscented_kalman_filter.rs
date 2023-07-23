@@ -396,11 +396,25 @@ impl UnscentedKalmanFilter {
         Ok(array)
     }
 
+    #[setter]
+    #[pyo3(name = "Q")]
+    fn py_set_Q(&mut self, Q: PyReadonlyArray2<Float>) -> PyResult<()> {
+        self.Q = Q.as_array().to_owned();
+        Ok(())
+    }
+
     #[getter]
     #[pyo3(name = "R")]
     fn py_get_R(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
         let array = self.R.clone().into_pyarray(py).to_owned();
         Ok(array)
+    }
+
+    #[setter]
+    #[pyo3(name = "R")]
+    fn py_set_R(&mut self, R: PyReadonlyArray2<Float>) -> PyResult<()> {
+        self.R = R.as_array().to_owned();
+        Ok(())
     }
 
     #[getter]

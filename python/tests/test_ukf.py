@@ -3,7 +3,7 @@ import pytest
 from filterpy.kalman.sigma_points import MerweScaledSigmaPoints
 import filterpy.kalman.UKF
 from filterpy.kalman.UKF import UnscentedKalmanFilter as UKF_Py
-from ukf import UnscentedKalmanFilter, SigmaPoints
+from ukf import UnscentedKalmanFilter, SigmaPoints, MeasurementFunction
 import numpy as np
 import logging
 
@@ -54,7 +54,6 @@ class CombinedFilter:
         return errors
 
 
-
 @pytest.mark.parametrize("dim_z", [1, 2, 3])
 @pytest.mark.parametrize("alpha", [1, 2, 3])
 @pytest.mark.parametrize("beta", [1, 2, 3])
@@ -62,7 +61,7 @@ class CombinedFilter:
 def test_constant_speed_model(dim_z, alpha, beta, kappa):
     dim_x = dim_z * 2
 
-    def hx(x: np.ndarray) -> np.ndarray:
+    def hx(x: np.ndarray, context=None) -> np.ndarray:
         if x.shape != (dim_x,):
             raise ValueError("x must have shape (dim_x,)")
 
@@ -79,7 +78,9 @@ def test_constant_speed_model(dim_z, alpha, beta, kappa):
 
     sigma_points_py = MerweScaledSigmaPoints(dim_x, alpha, beta, kappa)
     sigma_points_rs = SigmaPoints.merwe(dim_x, alpha, beta, kappa)
-    kalman_filter_rs = UnscentedKalmanFilter(dim_x, dim_z, hx, fx, sigma_points_rs)
+    kalman_filter_rs = UnscentedKalmanFilter(
+        dim_x, dim_z, MeasurementFunction(hx, None), fx, sigma_points_rs
+    )
     kalman_filter_py = filterpy.kalman.UKF.UnscentedKalmanFilter(
         dim_x, dim_z, 1.0, hx, fx, sigma_points_py
     )
@@ -101,13 +102,13 @@ def test_constant_speed_model(dim_z, alpha, beta, kappa):
 @pytest.mark.parametrize("beta", [1, 2, 3])
 @pytest.mark.parametrize("kappa", [0, 1, 2])
 def test_random_matrix_model(dim_z, dim_x, alpha, beta, kappa):
-    np.random.seed(np.mod(hash((dim_z, dim_x, alpha, beta, kappa)), 2**32-1))
+    np.random.seed(np.mod(hash((dim_z, dim_x, alpha, beta, kappa)), 2**32 - 1))
     sigma_points = SigmaPoints.merwe(dim_x, alpha, beta, kappa)
 
-    H_mat = np.random.normal(size=(dim_z,dim_x))
-    F_mat = np.random.normal(size=(dim_x,dim_x))
+    H_mat = np.random.normal(size=(dim_z, dim_x))
+    F_mat = np.random.normal(size=(dim_x, dim_x))
 
-    def hx(x: np.ndarray) -> np.ndarray:
+    def hx(x: np.ndarray, context=None) -> np.ndarray:
         if x.shape != (dim_x,):
             raise ValueError("x must have shape (dim_x,)")
         return (H_mat @ x).astype(np.float32)
@@ -118,7 +119,9 @@ def test_random_matrix_model(dim_z, dim_x, alpha, beta, kappa):
 
         return (F_mat @ x).astype(np.float32)
 
-    kalman_filter_rs = UnscentedKalmanFilter(dim_x, dim_z, hx, fx, sigma_points)
+    kalman_filter_rs = UnscentedKalmanFilter(
+        dim_x, dim_z, MeasurementFunction(hx, None), fx, sigma_points
+    )
     sigma_points_py = MerweScaledSigmaPoints(dim_x, alpha, beta, kappa)
     kalman_filter_py = filterpy.kalman.UKF.UnscentedKalmanFilter(
         dim_x, dim_z, 1.0, hx, fx, sigma_points_py
@@ -133,3 +136,6 @@ def test_random_matrix_model(dim_z, dim_x, alpha, beta, kappa):
         ukf_comb.predict(dt)
 
     assert ukf_comb.total_error() < 1e-3
+
+
+# %%
