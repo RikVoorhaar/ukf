@@ -12,7 +12,6 @@ fov value.
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-from filterpy.common import Q_discrete_white_noise
 from scipy.ndimage import gaussian_filter1d
 from ukf_pyrs import UKF, SigmaPoints, measurement_function, transition_function
 

@@ -6,6 +6,7 @@ pub mod linalg_utils;
 pub mod ring_buffer;
 pub mod sigma_points;
 pub mod unscented_kalman_filter;
+pub mod examples;
 
 pub mod types;
 pub use types::Float;
@@ -14,6 +15,7 @@ use dynamic_functions::{PythonMeasurementFunction, PythonTransitionFunction};
 use pyo3::prelude::*;
 use sigma_points::SigmaPoints;
 use unscented_kalman_filter::UnscentedKalmanFilter;
+
 
 #[pymodule]
 fn ukf_pyrs(_py: Python, m: &PyModule) -> PyResult<()> {
