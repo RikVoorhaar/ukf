@@ -3,6 +3,8 @@ from ukf_pyrs.ukf_pyrs import (
     SigmaPoints,
     TransitionFunction,
     UKF,
+    PinholeCamera as Rust_PinholeCamera,
+    CameraProjector,
 )
 
 from ukf_pyrs.decorators import measurement_function, transition_function
@@ -15,4 +17,6 @@ __all__ = [
     "SigmaPoints",
     "measurement_function",
     "transition_function",
+    "Rust_PinholeCamera",
+    "CameraProjector",
 ]
