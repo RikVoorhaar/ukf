@@ -28,7 +28,8 @@ fn ukf_pyrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PythonTransitionFunction>()?;
     m.add_class::<examples::pinhole_camera::PinholeCamera>()?;
     m.add_class::<examples::pinhole_camera::CameraProjector>()?;
-    // m.add_function(wrap_pyfunction!(constant_speed_ukf, m)?)?;
+    m.add_class::<examples::simple_example::CoordinateProjectionFunction>()?;
+    m.add_class::<examples::simple_example::FirstOrderTransitionFunction>()?;
 
     Ok(())
 }

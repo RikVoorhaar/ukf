@@ -9,14 +9,20 @@ this we can just make up an intrinsic and extrinsic matrix; it doesn't really
 matter. Although it would be nice to have a method that can create them from an
 fov value. 
 """
-import cv2
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy.ndimage import gaussian_filter1d
-from ukf_pyrs import UKF, SigmaPoints, measurement_function, transition_function
-from ukf_pyrs.pinhole_camera import PinholeCamera
-from functools import cached_property
+from time import perf_counter
 
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy.ndimage import gaussian_filter1d
+
+from ukf_pyrs import (
+    UKF,
+    FirstOrderTransitionFunction,
+    SigmaPoints,
+    measurement_function,
+    transition_function,
+)
+from ukf_pyrs.pinhole_camera import CameraProjector, PinholeCamera
 
 point_a = np.array([-50, 0, 0])
 point_b = np.array([0, 120, 130])
@@ -179,12 +185,13 @@ def fx_first_order(x: np.ndarray, dt: float) -> np.ndarray:
 
 
 sigma_points = SigmaPoints.merwe(dim_x, 0.5, 2, -2)
-kalman_filter = UKF(dim_x, dim_z, hx_first_order, fx_first_order, sigma_points)
+hx_rust = CameraProjector([cam1.to_rust(), cam2.to_rust()])
+
+fx_rust = FirstOrderTransitionFunction(3)
+kalman_filter = UKF(dim_x, dim_z, hx_rust, fx_rust, sigma_points)
+# kalman_filter = UKF(dim_x, dim_z, hx_first_order, fx_first_order, sigma_points)
 
 
-# kalman_filter.Q = Q_discrete_white_noise(
-#     2, dt=dt, var=1e6, block_size=3, order_by_dim=False
-# ).astype(float_type)
 kalman_filter.Q = np.diag([1] * 3 + [3e3] * 3).astype(float_type)
 kalman_filter.Q *= 1e-2
 kalman_filter.R = np.diag([1, 1]).astype(float_type) * 1e0
@@ -193,12 +200,14 @@ predictions_list = []
 for p1, p2 in zip(
     proj_points_obs1.astype(float_type), proj_points_obs2.astype(float_type)
 ):
-    hx_first_order.context = 0
+    # hx_first_order.context = 0
+    hx_rust.select_camera(0)
     kalman_filter.predict(dt)
     kalman_filter.update(p1)
     predictions_list.append(kalman_filter.x)
 
-    hx_first_order.context = 1
+    # hx_first_order.context = 1
+    hx_rust.select_camera(1)
     kalman_filter.predict(dt)
     kalman_filter.update(p2)
     predictions_list.append(kalman_filter.x)
@@ -254,3 +263,71 @@ for i, v in enumerate(velocity.T):
     plt.plot(v, color=colors[i], linestyle="--")
 plt.legend()
 plt.show()
+
+# %%
+"""Now let's look at the Rust version. Is it much faster?"""
+
+
+def time_python_version():
+    sigma_points = SigmaPoints.merwe(dim_x, 0.5, 2, -2)
+    kalman_filter = UKF(dim_x, dim_z, hx_first_order, fx_first_order, sigma_points)
+
+    kalman_filter.Q = np.diag([1] * 3 + [3e3] * 3).astype(float_type)
+    kalman_filter.Q *= 1e-2
+    kalman_filter.R = np.diag([1, 1]).astype(float_type) * 1e0
+    kalman_filter.P = np.diag([1e0] * 3 + [1e0] * 3).astype(float_type)
+    predictions_list = []
+    for p1, p2 in zip(
+        proj_points_obs1.astype(float_type), proj_points_obs2.astype(float_type)
+    ):
+        hx_first_order.context = 0
+        kalman_filter.predict(dt)
+        kalman_filter.update(p1)
+        predictions_list.append(kalman_filter.x)
+
+        hx_first_order.context = 1
+        kalman_filter.predict(dt)
+        kalman_filter.update(p2)
+        predictions_list.append(kalman_filter.x)
+
+
+time_before = perf_counter()
+for _ in range(100):
+    time_python_version()
+time_after = perf_counter()
+print(f"Python version took {time_after - time_before:.3f}s")
+# %%
+
+
+fx_rust(np.arange(6, dtype=np.float32), 3)
+hx_rust(np.arange(6, dtype=np.float32))
+
+
+def time_rust_version():
+    hx_rust = CameraProjector([cam1.to_rust(), cam2.to_rust()])
+    fx_rust = FirstOrderTransitionFunction(3)
+    sigma_points = SigmaPoints.merwe(dim_x, 0.5, 2, -2)
+    kalman_filter = UKF(dim_x, dim_z, hx_rust, fx_rust, sigma_points)
+
+    kalman_filter.Q = np.diag([1] * 3 + [3e3] * 3).astype(float_type)
+    kalman_filter.Q *= 1e-2
+    kalman_filter.R = np.diag([1, 1]).astype(float_type) * 1e0
+    kalman_filter.P = np.diag([1e0] * 3 + [1e0] * 3).astype(float_type)
+    predictions_list = []
+    for p1, p2 in zip(
+        proj_points_obs1.astype(float_type), proj_points_obs2.astype(float_type)
+    ):
+        kalman_filter.predict(dt)
+        kalman_filter.update(p1)
+        predictions_list.append(kalman_filter.x)
+
+        kalman_filter.predict(dt)
+        kalman_filter.update(p2)
+        predictions_list.append(kalman_filter.x)
+
+
+time_before = perf_counter()
+for _ in range(100):
+    time_rust_version()
+time_after = perf_counter()
+print(f"Rust version took {time_after - time_before:.3f}s")

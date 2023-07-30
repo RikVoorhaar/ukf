@@ -7,8 +7,10 @@ use pyo3::{pyclass, pymethods};
 use std::error::Error;
 
 use crate::dynamic_functions::{
-    MeasurementFunction, PythonMeasurementFunction, PythonTransitionFunction,
+    MeasurementFunction, //PythonMeasurementFunction, PythonTransitionFunction,
+    MeasurementFunctionBox,
     TransitionFunction,
+    TransitionFunctionBox,
 };
 use crate::linalg_utils::{right_solve_h, smallest_eigenvalue};
 use crate::sigma_points::SigmaPoints;
@@ -112,7 +114,7 @@ impl UnscentedKalmanFilter {
         for (col_sigmas, mut col_sigmas_f) in
             sigmas.outer_iter().zip(self.sigmas_f.columns_mut())
         {
-            let result = self.fx.call(col_sigmas, dt)?;
+            let result = self.fx.call_f(col_sigmas, dt)?;
 
             col_sigmas_f.assign(&result);
         }
@@ -168,7 +170,7 @@ impl UnscentedKalmanFilter {
     pub fn update(&mut self, z: ArrayView1<Float>) -> Result<(), Box<dyn Error>> {
         debug!("update");
         for i in 0..self.sigma_points.n_points() {
-            let new_column = self.hx.call(self.sigmas_f.column(i))?;
+            let new_column = self.hx.call_h(self.sigmas_f.column(i))?;
             self.sigmas_h.column_mut(i).assign(&new_column);
         }
 
@@ -208,21 +210,20 @@ type UnscentedTransformResult = (Py<PyArray1<Float>>, Py<PyArray2<Float>>);
 impl UnscentedKalmanFilter {
     #[new]
     fn py_new(
+        py: Python,
         dim_x: usize,
         dim_z: usize,
-        hx: PythonMeasurementFunction,
-        fx: PythonTransitionFunction,
+        hx: PyObject,
+        fx: PyObject,
         sigma_points: &PyAny,
     ) -> PyResult<Self> {
         let sigma_points_rust = sigma_points.extract::<SigmaPoints>()?;
+        let h_py: MeasurementFunctionBox =
+            hx.call_method0(py, "to_measurement_box")?.extract(py)?;
+        let f_py: TransitionFunctionBox =
+            fx.call_method0(py, "to_transition_box")?.extract(py)?;
 
-        Ok(Self::new(
-            dim_x,
-            dim_z,
-            Box::new(hx),
-            Box::new(fx),
-            sigma_points_rust,
-        ))
+        Ok(Self::new(dim_x, dim_z, h_py.h, f_py.f, sigma_points_rust))
     }
 
     #[pyo3(name = "predict")]

@@ -5,6 +5,8 @@ from ukf_pyrs.ukf_pyrs import (
     UKF,
     PinholeCamera as Rust_PinholeCamera,
     CameraProjector,
+    FirstOrderTransitionFunction,
+    CoordinateProjectionFunction,
 )
 
 from ukf_pyrs.decorators import measurement_function, transition_function

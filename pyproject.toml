@@ -1,6 +1,12 @@
 [build-system]
-requires = ["setuptools", "wheel", "maturin"]
+requires = ["setuptools", "wheel", "maturin>=1.1"]
 build-backend = "maturin"
+
+[tool.maturin]
+python-source = "."
+module-name = "ukf_pyrs.ukf_pyrs"
+
+
 
 [project]
 name = "ukf_pyrs"

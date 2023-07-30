@@ -2,14 +2,14 @@
 from functools import cached_property
 
 import cv2
-import matplotlib.pyplot as plt
 import numpy as np
-from scipy.ndimage import gaussian_filter1d
 
 from ukf_pyrs import (
-    CameraProjector,
     Rust_PinholeCamera,
+    CameraProjector
 )
+
+__all__ = ["PinholeCamera", "CameraProjector"]
 
 
 class PinholeCamera:
@@ -22,7 +22,7 @@ class PinholeCamera:
         self.rvec = -rotation_rodrigues
         self.rmat = cv2.Rodrigues(self.rvec)[0]
         self.tvec = (self.rmat @ position).reshape(3, 1)
-        self.intrinsic_matrix = camera_matrix
+        self.intrinsic_matrix = camera_matrix.astype(np.float32)
 
     def project(self, points: np.ndarray) -> np.ndarray:
         """
@@ -93,20 +93,20 @@ class PinholeCamera:
     @cached_property
     def fundamental_matrix_translation(self) -> tuple[np.ndarray, np.ndarray]:
         M_extr = self.extrinsic_matrix
-        Mat = (M_extr[:3, :3].T @ self.intrinsic_matrix.T).copy()
-        t = (M_extr[:3, 3] @ self.intrinsic_matrix.T).copy()
+        Mat = (M_extr[:3, :3].T @ self.intrinsic_matrix.T).copy().astype(np.float32)
+        t = (M_extr[:3, 3] @ self.intrinsic_matrix.T).copy().astype(np.float32)
         return Mat, t
 
     def world_to_screen_fast(self, points: np.ndarray) -> np.ndarray:
         M, t = self.fundamental_matrix_translation
-        points = points @ M + t
+        points = points.astype(np.float32) @ M + t
         points /= points[:, 2:]
         return points[:, :2]
 
     def world_to_screen_single(self, point: np.ndarray) -> np.ndarray:
         M, t = self.fundamental_matrix_translation
-        point = point @ M + t
-        return np.array([point[0] / point[2], point[1] / point[2]], np.float32)
+        point = point.astype(np.float32) @ M + t
+        return np.array([point[0] / point[2], point[1] / point[2]])
 
     def world_to_screen(self, points: np.ndarray) -> np.ndarray:
         """
@@ -147,22 +147,3 @@ def rotation_from_lookat(
     return cv2.Rodrigues(rot_mat)[0]
 
 
-# %%
-cam1 = PinholeCamera.from_params(
-    camera_position=np.array([50, 100, 0]),
-    lookat_target=np.array([0, 0, 0]),
-    fov_x_degrees=90,
-    resolution=np.array([640, 480]),
-)
-cam2 = PinholeCamera.from_params(
-    camera_position=np.array([-50, 80, 0]),
-    lookat_target=np.array([0, 0, 0]),
-    fov_x_degrees=90,
-    resolution=np.array([640, 480]),
-)
-cams = [cam1.to_rust(), cam2.to_rust()]
-projector = CameraProjector(cams)
-point = np.random.normal(size=3).astype(np.float32)
-projector.select_camera(1)
-projector(point) - cam2.world_to_screen_single(point)
-# %%

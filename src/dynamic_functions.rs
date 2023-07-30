@@ -32,7 +32,7 @@ impl Clone for ContextContainer {
 // Measurement function
 // -------------------------------------------------------------------------------------
 pub trait MeasurementFunction: Send {
-    fn call(&self, x: ArrayView1<Float>) -> PyResult<Array1<Float>>;
+    fn call_h(&self, x: ArrayView1<Float>) -> PyResult<Array1<Float>>;
 
     fn py_call(
         &self,
@@ -40,8 +40,21 @@ pub trait MeasurementFunction: Send {
         x: PyReadonlyArray1<Float>,
     ) -> PyResult<Py<PyArray1<Float>>> {
         let x = x.as_array();
-        let result = self.call(x)?;
+        let result = self.call_h(x)?;
         Ok(result.into_pyarray(py).to_owned())
+    }
+
+    fn to_measurement_box(&self) -> MeasurementFunctionBox;
+}
+
+#[pyclass(name = "MeasurementFunctionBox")]
+pub struct MeasurementFunctionBox {
+    pub h: Box<dyn MeasurementFunction>,
+}
+
+impl Clone for MeasurementFunctionBox {
+    fn clone(&self) -> Self {
+        self.h.to_measurement_box()
     }
 }
 
@@ -63,7 +76,7 @@ impl Clone for PythonMeasurementFunction {
 }
 
 impl MeasurementFunction for PythonMeasurementFunction {
-    fn call(&self, x: ArrayView1<Float>) -> PyResult<Array1<Float>> {
+    fn call_h(&self, x: ArrayView1<Float>) -> PyResult<Array1<Float>> {
         Python::with_gil(|py| -> PyResult<Array1<Float>> {
             let x_py = x.to_owned().into_pyarray(py);
             let context_container = self.context.borrow(py);
@@ -86,6 +99,11 @@ impl MeasurementFunction for PythonMeasurementFunction {
             Ok(result)
         })
     }
+
+    fn to_measurement_box(&self) -> MeasurementFunctionBox {
+        let h = self.clone();
+        MeasurementFunctionBox { h: Box::new(h) }
+    }
 }
 
 #[pymethods]
@@ -102,13 +120,19 @@ impl PythonMeasurementFunction {
         }
     }
 
+    #[pyo3(name = "to_measurement_box")]
+    pub fn py_to_measurement_box(&self) -> PyResult<MeasurementFunctionBox> {
+        let h = self.clone();
+        Ok(MeasurementFunctionBox { h: Box::new(h) })
+    }
+
     #[pyo3(name = "__call__")]
     pub fn py_call(
         &self,
         py: Python<'_>,
         x: PyReadonlyArray1<Float>,
     ) -> PyResult<Py<PyArray1<Float>>> {
-        self.call(x.as_array())
+        self.call_h(x.as_array())
             .map(|result| result.into_pyarray(py).to_owned())
     }
 
@@ -132,7 +156,7 @@ impl PythonMeasurementFunction {
 // Transition function
 // -------------------------------------------------------------------------------------
 pub trait TransitionFunction: Send {
-    fn call(&self, x: ArrayView1<Float>, dt: Float) -> PyResult<Array1<Float>>;
+    fn call_f(&self, x: ArrayView1<Float>, dt: Float) -> PyResult<Array1<Float>>;
 
     fn py_call(
         &self,
@@ -141,8 +165,20 @@ pub trait TransitionFunction: Send {
         dt: Float,
     ) -> PyResult<Py<PyArray1<Float>>> {
         let x = x.as_array();
-        let result = self.call(x, dt)?;
+        let result = self.call_f(x, dt)?;
         Ok(result.into_pyarray(py).to_owned())
+    }
+
+    fn to_transition_box(&self) -> TransitionFunctionBox;
+}
+#[pyclass]
+pub struct TransitionFunctionBox {
+    pub f: Box<dyn TransitionFunction>,
+}
+
+impl Clone for TransitionFunctionBox {
+    fn clone(&self) -> Self {
+        self.f.to_transition_box()
     }
 }
 
@@ -164,7 +200,7 @@ impl Clone for PythonTransitionFunction {
 }
 
 impl TransitionFunction for PythonTransitionFunction {
-    fn call(&self, x: ArrayView1<Float>, dt: Float) -> PyResult<Array1<Float>> {
+    fn call_f(&self, x: ArrayView1<Float>, dt: Float) -> PyResult<Array1<Float>> {
         Python::with_gil(|py| -> PyResult<Array1<Float>> {
             let x_py = x.to_owned().into_pyarray(py);
             let context_container = self.context.borrow(py);
@@ -186,6 +222,11 @@ impl TransitionFunction for PythonTransitionFunction {
             let result = result_py.to_owned_array();
             Ok(result)
         })
+    }
+
+    fn to_transition_box(&self) -> TransitionFunctionBox {
+        let f = self.clone();
+        TransitionFunctionBox { f: Box::new(f) }
     }
 }
 
@@ -210,7 +251,7 @@ impl PythonTransitionFunction {
         x: PyReadonlyArray1<Float>,
         dt: Float,
     ) -> PyResult<Py<PyArray1<Float>>> {
-        self.call(x.as_array(), dt)
+        self.call_f(x.as_array(), dt)
             .map(|result| result.into_pyarray(py).to_owned())
     }
 
@@ -227,5 +268,11 @@ impl PythonTransitionFunction {
         let mut context_container = self.context.borrow_mut(py);
         context_container.context = context;
         Ok(())
+    }
+
+    #[pyo3(name = "to_transition_box")]
+    pub fn py_to_transition_box(&self) -> PyResult<TransitionFunctionBox> {
+        let f = self.clone();
+        Ok(TransitionFunctionBox { f: Box::new(f) })
     }
 }

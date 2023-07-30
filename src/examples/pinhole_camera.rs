@@ -2,7 +2,7 @@ use crate::Float;
 use ndarray::{arr1, s, Array1, Array2, Array3, ArrayView1, ArrayView2, Axis};
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 
-use crate::dynamic_functions::MeasurementFunction;
+use crate::dynamic_functions::{MeasurementFunction, MeasurementFunctionBox};
 use pyo3::prelude::*;
 use pyo3::{pyclass, pymethods};
 
@@ -67,6 +67,7 @@ impl PinholeCamera {
 }
 
 #[pyclass]
+#[derive(Clone)]
 pub struct CameraProjector {
     pub index: usize,
     pub fundamental_matrices: Array3<Float>,
@@ -106,11 +107,16 @@ impl CameraProjector {
 }
 
 impl MeasurementFunction for CameraProjector {
-    fn call(&self, x: ArrayView1<Float>) -> PyResult<Array1<Float>> {
-        let x = x.to_owned();
+    fn call_h(&self, x: ArrayView1<Float>) -> PyResult<Array1<Float>> {
+        let x = x.slice(s![..3]).to_owned();
         let x = x.dot(&self.fundamental_matrices.slice(s![self.index, .., ..]));
         let x = x + self.translation_vectors.slice(s![self.index, ..]);
         Ok(arr1(&[x[0] / x[2], x[1] / x[2]]))
+    }
+
+    fn to_measurement_box(&self) -> MeasurementFunctionBox {
+        let h = self.clone();
+        MeasurementFunctionBox { h: Box::new(h) }
     }
 }
 
@@ -143,7 +149,12 @@ impl CameraProjector {
         py: Python<'_>,
         x: PyReadonlyArray1<Float>,
     ) -> PyResult<Py<PyArray1<Float>>> {
-        self.call(x.as_array())
+        self.call_h(x.as_array())
             .map(|result| result.into_pyarray(py).to_owned())
+    }
+
+    #[pyo3(name = "to_measurement_box")]
+    pub fn py_to_measurement_box(&self) -> PyResult<MeasurementFunctionBox> {
+        Ok(self.to_measurement_box())
     }
 }
