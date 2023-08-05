@@ -1,11 +1,11 @@
 use crate::Float;
-use log::debug;
+use anyhow::{anyhow, Error};
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use ndarray_linalg::cholesky::{Cholesky, UPLO};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 use pyo3::{pyclass, pymethods};
-use std::{error::Error, sync::Arc};
+use std::sync::Arc;
 
 #[pyclass]
 #[derive(Clone)]
@@ -21,7 +21,7 @@ pub type SigmaPointsGeneratorMethod = Arc<
             &SigmaPointsContainer,
             ArrayView1<Float>,
             ArrayView2<Float>,
-        ) -> Result<Array2<Float>, Box<dyn Error>>
+        ) -> Result<Array2<Float>, Error>
         + Send
         + Sync,
 >;
@@ -38,7 +38,7 @@ impl SigmaPoints {
         &self,
         x: ArrayView1<Float>,
         P: ArrayView2<Float>,
-    ) -> Result<Array2<Float>, Box<dyn Error>> {
+    ) -> Result<Array2<Float>, Error> {
         (self.f)(&self.container, x, P)
     }
 
@@ -74,22 +74,20 @@ impl SigmaPoints {
         let f_inner = move |container: &SigmaPointsContainer,
                             x: ArrayView1<Float>,
                             P: ArrayView2<Float>|
-              -> Result<Array2<Float>, Box<dyn Error>> {
+              -> Result<Array2<Float>, Error> {
             if x.len() != container.size {
-                return Err("Input x of unexpected size".into());
+                return Err(anyhow!("Input x of unexpected size"));
             }
             if P.shape() != [container.size, container.size] {
-                return Err("Input P of unexpected size".into());
+                return Err(anyhow!("Input P of unexpected size"));
             }
 
             let n: Float = container.size as Float;
 
-            debug!("computing Cholesky");
-
             let U: Array2<Float> = (lambda + n) * P.to_owned();
-            debug!("U: {:?}", U);
-            let U: Array2<Float> = (U).cholesky(UPLO::Upper)?;
-            debug!("Computed Cholesky");
+            let U: Array2<Float> = (U)
+                .cholesky(UPLO::Upper)
+                .map_err(|_| anyhow!("Cholesky failed"))?;
 
             let mut sigmas: Array2<Float> =
                 Array2::zeros((container.n_points, container.size));

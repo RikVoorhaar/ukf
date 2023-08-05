@@ -2,21 +2,17 @@ use log::debug;
 use ndarray::{Array1, Array2, ArrayView1, Axis};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 
+use anyhow::{anyhow, Error};
 use pyo3::prelude::*;
 use pyo3::{pyclass, pymethods};
-use std::error::Error;
 
-use crate::dynamic_functions::{
-    MeasurementFunction, //PythonMeasurementFunction, PythonTransitionFunction,
-    MeasurementFunctionBox,
-    TransitionFunction,
-    TransitionFunctionBox,
-};
+use crate::dynamic_functions::{MeasurementFunctionBox, TransitionFunctionBox};
 use crate::linalg_utils::{right_solve_h, smallest_eigenvalue};
 use crate::sigma_points::SigmaPoints;
 use crate::Float;
 
 #[pyclass(name = "UKF")]
+#[derive(Clone)]
 pub struct UnscentedKalmanFilter {
     pub x: Array1<Float>,
     pub P: Array2<Float>,
@@ -29,8 +25,8 @@ pub struct UnscentedKalmanFilter {
     sigma_points: SigmaPoints,
     pub dim_x: usize,
     pub dim_z: usize,
-    hx: Box<dyn MeasurementFunction>,
-    fx: Box<dyn TransitionFunction>,
+    hx: MeasurementFunctionBox,
+    fx: TransitionFunctionBox,
     sigmas_f: Array2<Float>,
     sigmas_h: Array2<Float>,
     pub K: Array2<Float>,
@@ -43,8 +39,8 @@ impl UnscentedKalmanFilter {
     pub fn new(
         dim_x: usize,
         dim_z: usize,
-        hx: Box<dyn MeasurementFunction>,
-        fx: Box<dyn TransitionFunction>,
+        hx: MeasurementFunctionBox,
+        fx: TransitionFunctionBox,
         sigma_points: SigmaPoints,
     ) -> Self {
         let x: Array1<Float> = Array1::zeros(dim_x);
@@ -107,28 +103,26 @@ impl UnscentedKalmanFilter {
     }
 
     // TODO: Make this use an immutable self and a return value instead
-    fn compute_process_sigmas(&mut self, dt: Float) -> Result<(), Box<dyn Error>> {
-        debug!("process sigmas");
+    fn compute_process_sigmas(&mut self, dt: Float) -> Result<(), Error> {
         let sigmas = self.sigma_points.call(self.x.view(), self.P.view())?;
 
         for (col_sigmas, mut col_sigmas_f) in
             sigmas.outer_iter().zip(self.sigmas_f.columns_mut())
         {
-            let result = self.fx.call_f(col_sigmas, dt)?;
-
+            let result =
+                self.fx.f.call_f(col_sigmas, dt).map_err(|e| {
+                    anyhow!(format!("Error in transition function: {}", e))
+                })?;
             col_sigmas_f.assign(&result);
         }
 
         Ok(())
     }
 
-    pub fn predict(&mut self, dt: Float) -> Result<(), Box<dyn Error>> {
-        debug!("predict");
+    pub fn predict(&mut self, dt: Float) -> Result<(), Error> {
         self.compute_process_sigmas(dt)?;
 
         let (x, P) = self.unscented_transform(&self.sigmas_f, Some(&self.Q));
-        debug!("self.P smallest eigval: {}", smallest_eigenvalue(&self.P));
-        debug!("P smallest eigval: {}", smallest_eigenvalue(&P));
 
         self.x_prior = x.clone();
         self.P_prior = P.clone();
@@ -167,10 +161,10 @@ impl UnscentedKalmanFilter {
         L.dot(&R.t())
     }
 
-    pub fn update(&mut self, z: ArrayView1<Float>) -> Result<(), Box<dyn Error>> {
+    pub fn update(&mut self, z: ArrayView1<Float>) -> Result<(), Error> {
         debug!("update");
         for i in 0..self.sigma_points.n_points() {
-            let new_column = self.hx.call_h(self.sigmas_f.column(i))?;
+            let new_column = self.hx.h.call_h(self.sigmas_f.column(i))?;
             self.sigmas_h.column_mut(i).assign(&new_column);
         }
 
@@ -218,12 +212,12 @@ impl UnscentedKalmanFilter {
         sigma_points: &PyAny,
     ) -> PyResult<Self> {
         let sigma_points_rust = sigma_points.extract::<SigmaPoints>()?;
-        let h_py: MeasurementFunctionBox =
+        let h: MeasurementFunctionBox =
             hx.call_method0(py, "to_measurement_box")?.extract(py)?;
-        let f_py: TransitionFunctionBox =
+        let f: TransitionFunctionBox =
             fx.call_method0(py, "to_transition_box")?.extract(py)?;
 
-        Ok(Self::new(dim_x, dim_z, h_py.h, f_py.f, sigma_points_rust))
+        Ok(Self::new(dim_x, dim_z, h, f, sigma_points_rust))
     }
 
     #[pyo3(name = "predict")]
@@ -279,14 +273,14 @@ impl UnscentedKalmanFilter {
 
     #[getter]
     #[pyo3(name = "x")]
-    fn py_get_x(&self, py: Python<'_>) -> PyResult<Py<PyArray1<Float>>> {
+    pub fn py_get_x(&self, py: Python<'_>) -> PyResult<Py<PyArray1<Float>>> {
         let array = self.x.clone().into_pyarray(py).to_owned();
         Ok(array)
     }
 
     #[setter]
     #[pyo3(name = "x")]
-    fn py_set_x(&mut self, x: PyReadonlyArray1<Float>) -> PyResult<()> {
+    pub fn py_set_x(&mut self, x: PyReadonlyArray1<Float>) -> PyResult<()> {
         self.x = x.as_array().to_owned();
         Ok(())
     }
@@ -426,7 +420,7 @@ impl UnscentedKalmanFilter {
         py: Python<'_>,
         context: PyObject,
     ) -> PyResult<()> {
-        self.hx.update_py_context(py, context)
+        self.hx.h.update_py_context(py, context)
     }
 
     fn update_transition_context(
@@ -434,6 +428,6 @@ impl UnscentedKalmanFilter {
         py: Python<'_>,
         context: PyObject,
     ) -> PyResult<()> {
-        self.fx.update_py_context(py, context)
+        self.fx.f.update_py_context(py, context)
     }
 }

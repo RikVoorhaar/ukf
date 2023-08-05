@@ -31,7 +31,7 @@ impl Clone for ContextContainer {
 // -------------------------------------------------------------------------------------
 // Measurement function
 // -------------------------------------------------------------------------------------
-pub trait MeasurementFunction: Send {
+pub trait MeasurementFunction: Send + Sync {
     fn call_h(&self, x: ArrayView1<Float>) -> PyResult<Array1<Float>>;
 
     fn py_call(
@@ -163,7 +163,7 @@ impl PythonMeasurementFunction {
 // -------------------------------------------------------------------------------------
 // Transition function
 // -------------------------------------------------------------------------------------
-pub trait TransitionFunction: Send {
+pub trait TransitionFunction: Send + Sync {
     fn call_f(&self, x: ArrayView1<Float>, dt: Float) -> PyResult<Array1<Float>>;
 
     fn py_call(
