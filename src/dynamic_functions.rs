@@ -45,6 +45,8 @@ pub trait MeasurementFunction: Send {
     }
 
     fn to_measurement_box(&self) -> MeasurementFunctionBox;
+
+    fn update_py_context(&mut self, py: Python<'_>, context: PyObject) -> PyResult<()>;
 }
 
 #[pyclass(name = "MeasurementFunctionBox")]
@@ -103,6 +105,12 @@ impl MeasurementFunction for PythonMeasurementFunction {
     fn to_measurement_box(&self) -> MeasurementFunctionBox {
         let h = self.clone();
         MeasurementFunctionBox { h: Box::new(h) }
+    }
+
+    fn update_py_context(&mut self, py: Python<'_>, context: PyObject) -> PyResult<()> {
+        let mut context_container = self.context.borrow_mut(py);
+        context_container.context = context;
+        Ok(())
     }
 }
 
@@ -170,6 +178,8 @@ pub trait TransitionFunction: Send {
     }
 
     fn to_transition_box(&self) -> TransitionFunctionBox;
+
+    fn update_py_context(&mut self, py: Python<'_>, context: PyObject) -> PyResult<()>;
 }
 #[pyclass]
 pub struct TransitionFunctionBox {
@@ -227,6 +237,12 @@ impl TransitionFunction for PythonTransitionFunction {
     fn to_transition_box(&self) -> TransitionFunctionBox {
         let f = self.clone();
         TransitionFunctionBox { f: Box::new(f) }
+    }
+
+    fn update_py_context(&mut self, py: Python<'_>, context: PyObject) -> PyResult<()> {
+        let mut context_container = self.context.borrow_mut(py);
+        context_container.context = context;
+        Ok(())
     }
 }
 

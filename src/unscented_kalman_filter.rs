@@ -420,4 +420,20 @@ impl UnscentedKalmanFilter {
         let array = self.sigmas_h.clone().into_pyarray(py).to_owned();
         Ok(array)
     }
+
+    fn update_measurement_context(
+        &mut self,
+        py: Python<'_>,
+        context: PyObject,
+    ) -> PyResult<()> {
+        self.hx.update_py_context(py, context)
+    }
+
+    fn update_transition_context(
+        &mut self,
+        py: Python<'_>,
+        context: PyObject,
+    ) -> PyResult<()> {
+        self.fx.update_py_context(py, context)
+    }
 }

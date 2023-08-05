@@ -118,6 +118,18 @@ impl MeasurementFunction for CameraProjector {
         let h = self.clone();
         MeasurementFunctionBox { h: Box::new(h) }
     }
+
+    fn update_py_context(&mut self, py: Python<'_>, context: PyObject) -> PyResult<()> {
+        let index: usize = context.extract(py)?;
+        if index >= self.size() {
+            return Err(pyo3::exceptions::PyIndexError::new_err(format!(
+                "Index {} out of range",
+                index
+            )));
+        }
+        self.index = index;
+        Ok(())
+    }
 }
 
 #[pymethods]

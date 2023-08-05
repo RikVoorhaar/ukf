@@ -1,0 +1,21 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "maturin develop",
+            "type": "shell",
+            "command": "source .venv/bin/activate && maturin develop",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "never",
+                "panel": "dedicated",
+                "focus": false,
+                "close": true
+            },
+            "problemMatcher": []
+        }
+    ]
+}

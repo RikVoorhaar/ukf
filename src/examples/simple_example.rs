@@ -24,6 +24,10 @@ impl TransitionFunction for CoordinateProjectionFunction {
             f: Box::new(self.clone()),
         }
     }
+
+    fn update_py_context(&mut self, _: Python<'_>, _: PyObject) -> PyResult<()> {
+        Ok(())
+    }
 }
 
 impl MeasurementFunction for CoordinateProjectionFunction {
@@ -35,6 +39,9 @@ impl MeasurementFunction for CoordinateProjectionFunction {
         MeasurementFunctionBox {
             h: Box::new(self.clone()),
         }
+    }
+    fn update_py_context(&mut self, _: Python<'_>, _: PyObject) -> PyResult<()> {
+        Ok(())
     }
 }
 
@@ -98,6 +105,10 @@ impl TransitionFunction for FirstOrderTransitionFunction {
         TransitionFunctionBox {
             f: Box::new(self.clone()),
         }
+    }
+
+    fn update_py_context(&mut self, _: Python<'_>, _: PyObject) -> PyResult<()> {
+        Ok(())
     }
 }
 

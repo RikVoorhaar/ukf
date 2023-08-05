@@ -200,13 +200,12 @@ predictions_list = []
 for p1, p2 in zip(
     proj_points_obs1.astype(float_type), proj_points_obs2.astype(float_type)
 ):
-    # hx_first_order.context = 0
-    hx_rust.select_camera(0)
+    kalman_filter.update_measurement_context(0)
     kalman_filter.predict(dt)
     kalman_filter.update(p1)
     predictions_list.append(kalman_filter.x)
 
-    # hx_first_order.context = 1
+    kalman_filter.update_measurement_context(1)
     hx_rust.select_camera(1)
     kalman_filter.predict(dt)
     kalman_filter.update(p2)
@@ -317,10 +316,12 @@ def time_rust_version():
     for p1, p2 in zip(
         proj_points_obs1.astype(float_type), proj_points_obs2.astype(float_type)
     ):
+        kalman_filter.update_measurement_context(0)
         kalman_filter.predict(dt)
         kalman_filter.update(p1)
         predictions_list.append(kalman_filter.x)
 
+        kalman_filter.update_measurement_context(1)
         kalman_filter.predict(dt)
         kalman_filter.update(p2)
         predictions_list.append(kalman_filter.x)
