@@ -31,6 +31,7 @@ fn ukf_pyrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<examples::pinhole_camera::CameraProjector>()?;
     m.add_class::<examples::simple_example::CoordinateProjectionFunction>()?;
     m.add_class::<examples::simple_example::FirstOrderTransitionFunction>()?;
+    m.add_class::<parallel::UKFParallel>()?;
 
     Ok(())
 }

@@ -287,130 +287,130 @@ impl UnscentedKalmanFilter {
 
     #[getter]
     #[pyo3(name = "P")]
-    fn py_get_P(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
+    pub fn py_get_P(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
         let array = self.P.clone().into_pyarray(py).to_owned();
         Ok(array)
     }
 
     #[setter]
     #[pyo3(name = "P")]
-    fn py_set_P(&mut self, P: PyReadonlyArray2<Float>) -> PyResult<()> {
+    pub fn py_set_P(&mut self, P: PyReadonlyArray2<Float>) -> PyResult<()> {
         self.P = P.as_array().to_owned();
         Ok(())
     }
 
     #[getter]
     #[pyo3(name = "x_prior")]
-    fn py_get_x_prior(&self, py: Python<'_>) -> PyResult<Py<PyArray1<Float>>> {
+    pub fn py_get_x_prior(&self, py: Python<'_>) -> PyResult<Py<PyArray1<Float>>> {
         let array = self.x_prior.clone().into_pyarray(py).to_owned();
         Ok(array)
     }
 
     #[getter]
     #[pyo3(name = "P_prior")]
-    fn py_get_P_prior(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
+    pub fn py_get_P_prior(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
         let array = self.P_prior.clone().into_pyarray(py).to_owned();
         Ok(array)
     }
 
     #[getter]
     #[pyo3(name = "x_post")]
-    fn py_get_x_post(&self, py: Python<'_>) -> PyResult<Py<PyArray1<Float>>> {
+    pub fn py_get_x_post(&self, py: Python<'_>) -> PyResult<Py<PyArray1<Float>>> {
         let array = self.x_post.clone().into_pyarray(py).to_owned();
         Ok(array)
     }
 
     #[getter]
     #[pyo3(name = "P_post")]
-    fn py_get_P_post(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
+    pub fn py_get_P_post(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
         let array = self.P_post.clone().into_pyarray(py).to_owned();
         Ok(array)
     }
 
     #[getter]
     #[pyo3(name = "Q")]
-    fn py_get_Q(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
+    pub fn py_get_Q(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
         let array = self.Q.clone().into_pyarray(py).to_owned();
         Ok(array)
     }
 
     #[setter]
     #[pyo3(name = "Q")]
-    fn py_set_Q(&mut self, Q: PyReadonlyArray2<Float>) -> PyResult<()> {
+    pub fn py_set_Q(&mut self, Q: PyReadonlyArray2<Float>) -> PyResult<()> {
         self.Q = Q.as_array().to_owned();
         Ok(())
     }
 
     #[getter]
     #[pyo3(name = "R")]
-    fn py_get_R(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
+    pub fn py_get_R(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
         let array = self.R.clone().into_pyarray(py).to_owned();
         Ok(array)
     }
 
     #[setter]
     #[pyo3(name = "R")]
-    fn py_set_R(&mut self, R: PyReadonlyArray2<Float>) -> PyResult<()> {
+    pub fn py_set_R(&mut self, R: PyReadonlyArray2<Float>) -> PyResult<()> {
         self.R = R.as_array().to_owned();
         Ok(())
     }
 
     #[getter]
     #[pyo3(name = "sigma_points")]
-    fn py_get_sigma_points(&self) -> PyResult<SigmaPoints> {
+    pub fn py_get_sigma_points(&self) -> PyResult<SigmaPoints> {
         Ok(self.sigma_points.clone())
     }
 
     #[getter]
     #[pyo3(name = "dim_x")]
-    fn py_get_dim_x(&self) -> PyResult<usize> {
+    pub fn py_get_dim_x(&self) -> PyResult<usize> {
         Ok(self.dim_x)
     }
 
     #[getter]
     #[pyo3(name = "dim_z")]
-    fn py_get_dim_z(&self) -> PyResult<usize> {
+    pub fn py_get_dim_z(&self) -> PyResult<usize> {
         Ok(self.dim_z)
     }
 
     #[getter]
     #[pyo3(name = "K")]
-    fn py_get_K(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
+    pub fn py_get_K(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
         let array = self.K.clone().into_pyarray(py).to_owned();
         Ok(array)
     }
 
     #[getter]
     #[pyo3(name = "y")]
-    fn py_get_y(&self, py: Python<'_>) -> PyResult<Py<PyArray1<Float>>> {
+    pub fn py_get_y(&self, py: Python<'_>) -> PyResult<Py<PyArray1<Float>>> {
         let array = self.y.clone().into_pyarray(py).to_owned();
         Ok(array)
     }
 
     #[getter]
     #[pyo3(name = "z")]
-    fn py_get_z(&self, py: Python<'_>) -> PyResult<Py<PyArray1<Float>>> {
+    pub fn py_get_z(&self, py: Python<'_>) -> PyResult<Py<PyArray1<Float>>> {
         let array = self.z.clone().into_pyarray(py).to_owned();
         Ok(array)
     }
 
     #[getter]
     #[pyo3(name = "S")]
-    fn py_get_S(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
+    pub fn py_get_S(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
         let array = self.S.clone().into_pyarray(py).to_owned();
         Ok(array)
     }
 
     #[getter]
     #[pyo3(name = "sigmas_f")]
-    fn py_get_sigmas_f(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
+    pub fn py_get_sigmas_f(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
         let array = self.sigmas_f.clone().into_pyarray(py).to_owned();
         Ok(array)
     }
 
     #[getter]
     #[pyo3(name = "sigmas_h")]
-    fn py_get_sigmas_h(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
+    pub fn py_get_sigmas_h(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Float>>> {
         let array = self.sigmas_h.clone().into_pyarray(py).to_owned();
         Ok(array)
     }

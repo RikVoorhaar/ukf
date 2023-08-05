@@ -12,8 +12,7 @@
             "presentation": {
                 "reveal": "never",
                 "panel": "dedicated",
-                "focus": false,
-                "close": true
+                "focus": false
             },
             "problemMatcher": []
         }
