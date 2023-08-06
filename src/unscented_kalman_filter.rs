@@ -1,4 +1,3 @@
-use log::debug;
 use ndarray::{Array1, Array2, ArrayView1, Axis};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 
@@ -7,7 +6,7 @@ use pyo3::prelude::*;
 use pyo3::{pyclass, pymethods};
 
 use crate::dynamic_functions::{MeasurementFunctionBox, TransitionFunctionBox};
-use crate::linalg_utils::{right_solve_h, smallest_eigenvalue};
+use crate::linalg_utils::right_solve_h;
 use crate::sigma_points::SigmaPoints;
 use crate::Float;
 
@@ -86,7 +85,6 @@ impl UnscentedKalmanFilter {
         sigmas: &Array2<Float>,
         noise_cov: Option<&Array2<Float>>,
     ) -> (Array1<Float>, Array2<Float>) {
-        debug!("ut");
         let x: Array1<Float> = self.sigma_points.get_Wm().dot(sigmas);
 
         let y = &sigmas.t() - x.clone().insert_axis(Axis(1));
@@ -106,17 +104,20 @@ impl UnscentedKalmanFilter {
     fn compute_process_sigmas(&mut self, dt: Float) -> Result<(), Error> {
         let sigmas = self.sigma_points.call(self.x.view(), self.P.view())?;
 
-        debug!("Shape of sigmas: {:?}", sigmas.shape());
-        debug!("Shape of sigmas_f: {:?}", self.sigmas_f.shape());
-        for (row_sigmas, mut row_sigmas_f) in
-            sigmas.axis_iter(Axis(0)).zip(self.sigmas_f.rows_mut())
-        {
-            let result =
-                self.fx.f.call_f(row_sigmas, dt).map_err(|e| {
-                    anyhow!(format!("Error in transition function: {}", e))
-                })?;
-            row_sigmas_f.assign(&result);
-        }
+        // for (row_sigmas, mut row_sigmas_f) in
+        //     sigmas.axis_iter(Axis(0)).zip(self.sigmas_f.rows_mut())
+        // {
+        //     let result =
+        //         self.fx.f.call_f(row_sigmas, dt).map_err(|e| {
+        //             anyhow!(format!("Error in transition function: {}", e))
+        //         })?;
+        //     row_sigmas_f.assign(&result);
+        // }
+        self.fx
+            .f
+            .call_f_batch_mut(sigmas.view(), dt, &mut self.sigmas_f).map_err(|e| {
+                anyhow!(format!("Error in transition function: {}", e))
+            })?;
 
         Ok(())
     }
@@ -139,61 +140,30 @@ impl UnscentedKalmanFilter {
         x: ArrayView1<Float>,
         z: ArrayView1<Float>,
     ) -> Array2<Float> {
-        debug!("cross variance");
         let Wc = self.sigma_points.get_Wc();
-
-        let mut L = &self.sigmas_f.t() - x.insert_axis(Axis(1)).to_owned();
-
-        // debug!("Shape of L: {:?}", L.shape());
-        // debug!("L before\n{:?}", L);
-        // debug!("Shape of Wc: {:?}", Wc.shape());
-        // debug!("n_points= {:?}", self.sigma_points.n_points());
-
+        let mut L = &self.sigmas_f - x.insert_axis(Axis(0)).to_owned();
         for k in 0..self.sigma_points.n_points() {
-            let mut col = L.column_mut(k);
-            col *= Wc[k];
+            let mut row = L.row_mut(k);
+            row *= Wc[k];
         }
-        // debug!("L after\n{:?}", L);
-        // debug!("Shape of sigmas_h: {:?}", self.sigmas_h.shape());
-        // debug!("Shape of z: {:?}", z.shape());
         let R = &self.sigmas_h - z.insert_axis(Axis(0)).to_owned();
-        // debug!("Shape of R: {:?}", R.shape());
-        // debug!("R after\n{:?}", R);
 
-        L.dot(&R)
+        L.t().dot(&R)
     }
 
     pub fn update(&mut self, z: ArrayView1<Float>) -> Result<(), Error> {
-        debug!("update");
-        // for i in 0..self.sigma_points.n_points() {
-        //     let new_column = self.hx.h.call_h(self.sigmas_f.row(i))?;
-        //     self.sigmas_h.row_mut(i).assign(&new_column);
-        // }
         self.sigmas_h = self.hx.h.call_h_batch(self.sigmas_f.view())?;
 
         let (z_pred, S) = self.unscented_transform(&self.sigmas_h, Some(&self.R));
         let Pxz = self.cross_variance(self.x.view(), z_pred.view());
-        debug!("self.K before:\n{}", &self.K);
         self.K = right_solve_h(&Pxz, S.clone());
         self.S = S;
-        debug!("self.S after:\n{}", &self.S);
-        debug!("self.K after:\n{}", &self.K);
-        debug!("Pxz:\n{}", Pxz);
-        debug!("self.K . dot( self.S ):\n{}", self.K.dot(&self.S));
 
         self.z = z.to_owned();
         self.y = z.to_owned() - z_pred; // TODO: Remove this from the struct
 
         self.x += &self.K.dot(&self.y);
-        debug!(
-            "self.P smallest eigenval before: {}",
-            smallest_eigenvalue(&self.P)
-        );
         self.P -= &self.K.dot(&self.S.dot(&self.K.t()));
-        debug!(
-            "self.P smallest eigenval after: {}",
-            smallest_eigenvalue(&self.P)
-        );
 
         self.x_post = self.x.clone();
         self.P_post = self.P.clone();

@@ -1,12 +1,11 @@
 use crate::Float;
 use anyhow::{anyhow, Error};
-use log::debug;
 use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2};
 use ndarray_linalg::cholesky::{Cholesky, UPLO};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 use pyo3::{pyclass, pymethods};
-use std::ops::{Add, AddAssign, Sub, SubAssign};
+use std::ops::{AddAssign, SubAssign};
 use std::sync::Arc;
 
 #[pyclass]

@@ -1,6 +1,6 @@
 // Defines and implements traits for dynamic transition and measurement functions
 
-use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2, Axis};
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -207,6 +207,21 @@ pub trait TransitionFunction: Send + Sync {
     fn to_transition_box(&self) -> TransitionFunctionBox;
 
     fn update_py_context(&mut self, py: Python<'_>, context: PyObject) -> PyResult<()>;
+
+    #[inline(always)]
+    fn call_f_batch_mut(
+        &self,
+        X: ArrayView2<Float>,
+        dt: Float,
+        out: &mut Array2<Float>,
+    ) -> PyResult<()> {
+        // let mut result = Array2::zeros((X.nrows(), X.ncols()));
+        for (x, mut row) in X.axis_iter(Axis(0)).zip(out.rows_mut()) {
+            row.assign(&self.call_f(x, dt)?);
+        }
+
+        Ok(())
+    }
 }
 #[pyclass]
 pub struct TransitionFunctionBox {
