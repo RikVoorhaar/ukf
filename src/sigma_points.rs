@@ -1,11 +1,12 @@
 use crate::Float;
 use anyhow::{anyhow, Error};
 use log::debug;
-use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
+use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2};
 use ndarray_linalg::cholesky::{Cholesky, UPLO};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 use pyo3::{pyclass, pymethods};
+use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::sync::Arc;
 
 #[pyclass]
@@ -90,19 +91,19 @@ impl SigmaPoints {
                 .cholesky(UPLO::Upper)
                 .map_err(|_| anyhow!("Cholesky failed"))?;
 
-            let mut sigmas: Array2<Float> =
-                Array2::zeros((container.n_points, container.size));
-            sigmas.row_mut(0).assign(&x.to_owned());
+            let x_owned: Array1<Float> = x.to_owned();
+            let repeated_x = x_owned
+                .broadcast((container.n_points, container.size))
+                .unwrap();
+            let mut sigmas = repeated_x.to_owned();
 
-            for k in 0..container.size {
-                sigmas.row_mut(k + 1).assign(&(x.to_owned() + U.row(k)));
-                sigmas
-                    .row_mut(container.size + k + 1)
-                    .assign(&(x.to_owned() - U.row(k)));
-            }
-            // debug!("sigmas.shape: {:?}", sigmas.shape());
+            sigmas
+                .slice_mut(s![1..container.size + 1, ..])
+                .add_assign(&U);
 
-            // let res = sigmas.t().to_owned(); // FIXME: make it output transposed without copy
+            sigmas
+                .slice_mut(s![container.size + 1..container.n_points, ..])
+                .sub_assign(&U);
 
             Ok(sigmas)
         };
