@@ -415,7 +415,7 @@ impl UnscentedKalmanFilter {
         Ok(array)
     }
 
-    fn update_measurement_context(
+    pub fn update_measurement_context(
         &mut self,
         py: Python<'_>,
         context: PyObject,
@@ -423,7 +423,7 @@ impl UnscentedKalmanFilter {
         self.hx.h.update_py_context(py, context)
     }
 
-    fn update_transition_context(
+    pub fn update_transition_context(
         &mut self,
         py: Python<'_>,
         context: PyObject,

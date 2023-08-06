@@ -7,7 +7,6 @@ use pyo3::prelude::*;
 use pyo3::{pyclass, pymethods};
 use rayon::iter::ParallelIterator;
 
-
 use crate::sigma_points::SigmaPoints;
 use crate::unscented_kalman_filter::UnscentedKalmanFilter;
 use crate::Float;
@@ -50,13 +49,7 @@ impl UKFParallel {
         F: FnMut(&mut UnscentedKalmanFilter, T) -> PyResult<()>,
     {
         for (ukf, value) in self.ukfs.iter_mut().zip(values.into_iter()) {
-            // if let Some(ukf) = Arc::get_mut(ukf) {
             func(ukf, value)?;
-            // } else {
-            //     return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-            //         "Failed to get mutable reference to UKF",
-            //     ));
-            // }
         }
         Ok(())
     }
@@ -253,5 +246,27 @@ impl UKFParallel {
         py: Python<'_>,
     ) -> PyResult<Vec<Py<PyArray2<Float>>>> {
         self.py_get_each(|ukf| ukf.py_get_sigmas_h(py))
+    }
+
+    fn update_measurement_context(
+        &mut self,
+        py: Python<'_>,
+        value_vec: Vec<PyObject>,
+    ) -> PyResult<()> {
+        for (ukf, value) in self.ukfs.iter_mut().zip(value_vec.into_iter()) {
+            ukf.update_measurement_context(py, value)?
+        }
+        Ok(())
+    }
+
+    fn update_transition_context(
+        &mut self,
+        py: Python<'_>,
+        value_vec: Vec<PyObject>,
+    ) -> PyResult<()> {
+        for (ukf, value) in self.ukfs.iter_mut().zip(value_vec.into_iter()) {
+            ukf.update_transition_context(py, value)?
+        }
+        Ok(())
     }
 }

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "wheel", "maturin>=1.1"]
+requires = ["maturin>=1.1", "setuptools", "wheel"]
 build-backend = "maturin"
 
 [tool.maturin]
@@ -7,20 +7,19 @@ python-source = "."
 module-name = "ukf_pyrs.ukf_pyrs"
 
 
-
 [project]
 name = "ukf_pyrs"
 version = "0.1.0"
 dependencies = [
-    "opencv-python",
     "filterpy",
     "matplotlib",
     "maturin",
     "numba",
     "numpy",
+    "opencv-python",
     "wheel",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "black", "ruff", "jupyter", "mypy"]
+dev = ["black", "jupyter", "mypy", "pyspy", "pytest", "ruff"]
 test = ["pytest"]
