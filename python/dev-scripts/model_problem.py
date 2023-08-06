@@ -74,7 +74,7 @@ dim_x = 3
 dim_z = 2
 
 
-@measurement_function
+@measurement_function(dim_z)
 def hx(x: np.ndarray, cam_id: int) -> np.ndarray:
     if cam_id == 0:
         return cam1.world_to_screen_single(x)
@@ -166,7 +166,7 @@ dim_z = 2
 float_type = np.float32
 
 
-@measurement_function
+@measurement_function(dim_z)
 def hx_first_order(x: np.ndarray, cam_id: int) -> np.ndarray:
     pos = x[:3]
     if cam_id == 0:

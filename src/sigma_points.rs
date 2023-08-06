@@ -1,5 +1,6 @@
 use crate::Float;
 use anyhow::{anyhow, Error};
+use log::debug;
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use ndarray_linalg::cholesky::{Cholesky, UPLO};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
@@ -99,6 +100,10 @@ impl SigmaPoints {
                     .row_mut(container.size + k + 1)
                     .assign(&(x.to_owned() - U.row(k)));
             }
+            // debug!("sigmas.shape: {:?}", sigmas.shape());
+
+            // let res = sigmas.t().to_owned(); // FIXME: make it output transposed without copy
+
             Ok(sigmas)
         };
         let f: SigmaPointsGeneratorMethod = Arc::new(f_inner);

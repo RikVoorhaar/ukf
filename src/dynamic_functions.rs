@@ -1,6 +1,6 @@
 // Defines and implements traits for dynamic transition and measurement functions
 
-use ndarray::{Array1, ArrayView1};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -47,6 +47,16 @@ pub trait MeasurementFunction: Send + Sync {
     fn to_measurement_box(&self) -> MeasurementFunctionBox;
 
     fn update_py_context(&mut self, py: Python<'_>, context: PyObject) -> PyResult<()>;
+
+    fn call_h_batch(&self, X: ArrayView2<Float>) -> PyResult<Array2<Float>> {
+        let mut result = Array2::zeros((X.nrows(), self.get_output_dim()));
+        for (i, x) in X.outer_iter().enumerate() {
+            result.row_mut(i).assign(&self.call_h(x)?);
+        }
+        Ok(result)
+    }
+
+    fn get_output_dim(&self) -> usize;
 }
 
 #[pyclass(name = "MeasurementFunctionBox")]
@@ -64,6 +74,7 @@ impl Clone for MeasurementFunctionBox {
 pub struct PythonMeasurementFunction {
     pub h: PyObject,
     pub context: Py<ContextContainer>,
+    pub output_dim: usize,
 }
 
 impl Clone for PythonMeasurementFunction {
@@ -71,7 +82,13 @@ impl Clone for PythonMeasurementFunction {
         Python::with_gil(|py| -> PyResult<Self> {
             let h = self.h.clone_ref(py);
             let context = self.context.clone_ref(py);
-            Ok(Self { h, context })
+            let output_dim = self.output_dim;
+
+            Ok(Self {
+                h,
+                context,
+                output_dim,
+            })
         })
         .unwrap()
     }
@@ -112,12 +129,21 @@ impl MeasurementFunction for PythonMeasurementFunction {
         context_container.context = context;
         Ok(())
     }
+
+    fn get_output_dim(&self) -> usize {
+        self.output_dim
+    }
 }
 
 #[pymethods]
 impl PythonMeasurementFunction {
     #[new]
-    pub fn new(h: PyObject, py: Python<'_>, context: Option<PyObject>) -> Self {
+    pub fn new(
+        h: PyObject,
+        py: Python<'_>,
+        output_dim: usize,
+        context: Option<PyObject>,
+    ) -> Self {
         let context_container = match context {
             Some(context) => Py::new(py, ContextContainer::new(context)).unwrap(),
             None => Py::new(py, ContextContainer::new(py.None())).unwrap(),
@@ -125,6 +151,7 @@ impl PythonMeasurementFunction {
         Self {
             h,
             context: context_container,
+            output_dim,
         }
     }
 

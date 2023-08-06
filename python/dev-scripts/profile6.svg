@@ -1,0 +1,415 @@
+<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg version="1.1" width="1200" height="794" onload="init(evt)" viewBox="0 0 1200 794" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:fg="http://github.com/jonhoo/inferno"><!--Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples.--><!--NOTES: --><defs><linearGradient id="background" y1="0" y2="1" x1="0" x2="0"><stop stop-color="#eeeeee" offset="5%"/><stop stop-color="#eeeeb0" offset="95%"/></linearGradient></defs><style type="text/css">
+text { font-family:"Verdana"; font-size:12px; fill:rgb(0,0,0); }
+#title { text-anchor:middle; font-size:17px; }
+#matched { text-anchor:end; }
+#search { text-anchor:end; opacity:0.1; cursor:pointer; }
+#search:hover, #search.show { opacity:1; }
+#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+#unzoom { cursor:pointer; }
+#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+.hide { display:none; }
+.parent { opacity:0.5; }
+</style><script type="text/ecmascript"><![CDATA[
+        var nametype = 'Function:';
+        var fontsize = 12;
+        var fontwidth = 0.59;
+        var xpad = 10;
+        var inverted = true;
+        var searchcolor = 'rgb(230,0,230)';
+        var fluiddrawing = true;
+        var truncate_text_right = false;
+    ]]><![CDATA["use strict";
+var details, searchbtn, unzoombtn, matchedtxt, svg, searching, frames;
+function init(evt) {
+    details = document.getElementById("details").firstChild;
+    searchbtn = document.getElementById("search");
+    unzoombtn = document.getElementById("unzoom");
+    matchedtxt = document.getElementById("matched");
+    svg = document.getElementsByTagName("svg")[0];
+    frames = document.getElementById("frames");
+    total_samples = parseInt(frames.attributes.total_samples.value);
+    searching = 0;
+
+    // Use GET parameters to restore a flamegraph's state.
+    var restore_state = function() {
+        var params = get_params();
+        if (params.x && params.y)
+            zoom(find_group(document.querySelector('[*|x="' + params.x + '"][y="' + params.y + '"]')));
+        if (params.s)
+            search(params.s);
+    };
+
+    if (fluiddrawing) {
+        // Make width dynamic so the SVG fits its parent's width.
+        svg.removeAttribute("width");
+        // Edge requires us to have a viewBox that gets updated with size changes.
+        var isEdge = /Edge\/\d./i.test(navigator.userAgent);
+        var update_for_width_change = function() {
+            if (isEdge) {
+                svg.attributes.viewBox.value = "0 0 " + svg.width.baseVal.value + " " + svg.height.baseVal.value;
+            }
+
+            // Keep consistent padding on left and right of frames container.
+            frames.attributes.width.value = svg.width.baseVal.value - xpad * 2;
+
+            // Text truncation needs to be adjusted for the current width.
+            var el = frames.children;
+            for(var i = 0; i < el.length; i++) {
+                update_text(el[i]);
+            }
+
+            // Keep search elements at a fixed distance from right edge.
+            var svgWidth = svg.width.baseVal.value;
+            searchbtn.attributes.x.value = svgWidth - xpad;
+            matchedtxt.attributes.x.value = svgWidth - xpad;
+        };
+        window.addEventListener('resize', function() {
+            update_for_width_change();
+        });
+        // This needs to be done asynchronously for Safari to work.
+        setTimeout(function() {
+            unzoom();
+            update_for_width_change();
+            restore_state();
+            if (!isEdge) {
+                svg.removeAttribute("viewBox");
+            }
+        }, 0);
+    } else {
+        restore_state();
+    }
+}
+// event listeners
+window.addEventListener("click", function(e) {
+    var target = find_group(e.target);
+    if (target) {
+        if (target.nodeName == "a") {
+            if (e.ctrlKey === false) return;
+            e.preventDefault();
+        }
+        if (target.classList.contains("parent")) unzoom();
+        zoom(target);
+
+        // set parameters for zoom state
+        var el = target.querySelector("rect");
+        if (el && el.attributes && el.attributes.y && el.attributes["fg:x"]) {
+            var params = get_params()
+            params.x = el.attributes["fg:x"].value;
+            params.y = el.attributes.y.value;
+            history.replaceState(null, null, parse_params(params));
+        }
+    }
+    else if (e.target.id == "unzoom") {
+        unzoom();
+
+        // remove zoom state
+        var params = get_params();
+        if (params.x) delete params.x;
+        if (params.y) delete params.y;
+        history.replaceState(null, null, parse_params(params));
+    }
+    else if (e.target.id == "search") search_prompt();
+}, false)
+// mouse-over for info
+// show
+window.addEventListener("mouseover", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = nametype + " " + g_to_text(target);
+}, false)
+// clear
+window.addEventListener("mouseout", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = ' ';
+}, false)
+// ctrl-F for search
+window.addEventListener("keydown",function (e) {
+    if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+        e.preventDefault();
+        search_prompt();
+    }
+}, false)
+// functions
+function get_params() {
+    var params = {};
+    var paramsarr = window.location.search.substr(1).split('&');
+    for (var i = 0; i < paramsarr.length; ++i) {
+        var tmp = paramsarr[i].split("=");
+        if (!tmp[0] || !tmp[1]) continue;
+        params[tmp[0]]  = decodeURIComponent(tmp[1]);
+    }
+    return params;
+}
+function parse_params(params) {
+    var uri = "?";
+    for (var key in params) {
+        uri += key + '=' + encodeURIComponent(params[key]) + '&';
+    }
+    if (uri.slice(-1) == "&")
+        uri = uri.substring(0, uri.length - 1);
+    if (uri == '?')
+        uri = window.location.href.split('?')[0];
+    return uri;
+}
+function find_child(node, selector) {
+    var children = node.querySelectorAll(selector);
+    if (children.length) return children[0];
+    return;
+}
+function find_group(node) {
+    var parent = node.parentElement;
+    if (!parent) return;
+    if (parent.id == "frames") return node;
+    return find_group(parent);
+}
+function orig_save(e, attr, val) {
+    if (e.attributes["fg:orig_" + attr] != undefined) return;
+    if (e.attributes[attr] == undefined) return;
+    if (val == undefined) val = e.attributes[attr].value;
+    e.setAttribute("fg:orig_" + attr, val);
+}
+function orig_load(e, attr) {
+    if (e.attributes["fg:orig_"+attr] == undefined) return;
+    e.attributes[attr].value = e.attributes["fg:orig_" + attr].value;
+    e.removeAttribute("fg:orig_" + attr);
+}
+function g_to_text(e) {
+    var text = find_child(e, "title").firstChild.nodeValue;
+    return (text)
+}
+function g_to_func(e) {
+    var func = g_to_text(e);
+    // if there's any manipulation we want to do to the function
+    // name before it's searched, do it here before returning.
+    return (func);
+}
+function update_text(e) {
+    var r = find_child(e, "rect");
+    var t = find_child(e, "text");
+    var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+    var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+    t.attributes.x.value = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+    // Smaller than this size won't fit anything
+    if (w < 2 * fontsize * fontwidth) {
+        t.textContent = "";
+        return;
+    }
+    t.textContent = txt;
+    // Fit in full text width
+    if (/^ *\$/.test(txt) || t.getComputedTextLength() < w)
+        return;
+    if (truncate_text_right) {
+        // Truncate the right side of the text.
+        for (var x = txt.length - 2; x > 0; x--) {
+            if (t.getSubStringLength(0, x + 2) <= w) {
+                t.textContent = txt.substring(0, x) + "..";
+                return;
+            }
+        }
+    } else {
+        // Truncate the left side of the text.
+        for (var x = 2; x < txt.length; x++) {
+            if (t.getSubStringLength(x - 2, txt.length) <= w) {
+                t.textContent = ".." + txt.substring(x, txt.length);
+                return;
+            }
+        }
+    }
+    t.textContent = "";
+}
+// zoom
+function zoom_reset(e) {
+    if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * parseInt(e.attributes["fg:x"].value) / total_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / total_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_reset(c[i]);
+    }
+}
+function zoom_child(e, x, zoomed_width_samples) {
+    if (e.tagName == "text") {
+        var parent_x = parseFloat(find_child(e.parentNode, "rect[x]").attributes.x.value);
+        e.attributes.x.value = format_percent(parent_x + (100 * 3 / frames.attributes.width.value));
+    } else if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * (parseInt(e.attributes["fg:x"].value) - x) / zoomed_width_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / zoomed_width_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_child(c[i], x, zoomed_width_samples);
+    }
+}
+function zoom_parent(e) {
+    if (e.attributes) {
+        if (e.attributes.x != undefined) {
+            e.attributes.x.value = "0.0%";
+        }
+        if (e.attributes.width != undefined) {
+            e.attributes.width.value = "100.0%";
+        }
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_parent(c[i]);
+    }
+}
+function zoom(node) {
+    var attr = find_child(node, "rect").attributes;
+    var width = parseInt(attr["fg:w"].value);
+    var xmin = parseInt(attr["fg:x"].value);
+    var xmax = xmin + width;
+    var ymin = parseFloat(attr.y.value);
+    unzoombtn.classList.remove("hide");
+    var el = frames.children;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        var a = find_child(e, "rect").attributes;
+        var ex = parseInt(a["fg:x"].value);
+        var ew = parseInt(a["fg:w"].value);
+        // Is it an ancestor
+        if (!inverted) {
+            var upstack = parseFloat(a.y.value) > ymin;
+        } else {
+            var upstack = parseFloat(a.y.value) < ymin;
+        }
+        if (upstack) {
+            // Direct ancestor
+            if (ex <= xmin && (ex+ew) >= xmax) {
+                e.classList.add("parent");
+                zoom_parent(e);
+                update_text(e);
+            }
+            // not in current path
+            else
+                e.classList.add("hide");
+        }
+        // Children maybe
+        else {
+            // no common path
+            if (ex < xmin || ex >= xmax) {
+                e.classList.add("hide");
+            }
+            else {
+                zoom_child(e, xmin, width);
+                update_text(e);
+            }
+        }
+    }
+}
+function unzoom() {
+    unzoombtn.classList.add("hide");
+    var el = frames.children;
+    for(var i = 0; i < el.length; i++) {
+        el[i].classList.remove("parent");
+        el[i].classList.remove("hide");
+        zoom_reset(el[i]);
+        update_text(el[i]);
+    }
+}
+// search
+function reset_search() {
+    var el = document.querySelectorAll("#frames rect");
+    for (var i = 0; i < el.length; i++) {
+        orig_load(el[i], "fill")
+    }
+    var params = get_params();
+    delete params.s;
+    history.replaceState(null, null, parse_params(params));
+}
+function search_prompt() {
+    if (!searching) {
+        var term = prompt("Enter a search term (regexp " +
+            "allowed, eg: ^ext4_)", "");
+        if (term != null) {
+            search(term)
+        }
+    } else {
+        reset_search();
+        searching = 0;
+        searchbtn.classList.remove("show");
+        searchbtn.firstChild.nodeValue = "Search"
+        matchedtxt.classList.add("hide");
+        matchedtxt.firstChild.nodeValue = ""
+    }
+}
+function search(term) {
+    var re = new RegExp(term);
+    var el = frames.children;
+    var matches = new Object();
+    var maxwidth = 0;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        // Skip over frames which are either not visible, or below the zoomed-to frame
+        if (e.classList.contains("hide") || e.classList.contains("parent")) {
+            continue;
+        }
+        var func = g_to_func(e);
+        var rect = find_child(e, "rect");
+        if (func == null || rect == null)
+            continue;
+        // Save max width. Only works as we have a root frame
+        var w = parseInt(rect.attributes["fg:w"].value);
+        if (w > maxwidth)
+            maxwidth = w;
+        if (func.match(re)) {
+            // highlight
+            var x = parseInt(rect.attributes["fg:x"].value);
+            orig_save(rect, "fill");
+            rect.attributes.fill.value = searchcolor;
+            // remember matches
+            if (matches[x] == undefined) {
+                matches[x] = w;
+            } else {
+                if (w > matches[x]) {
+                    // overwrite with parent
+                    matches[x] = w;
+                }
+            }
+            searching = 1;
+        }
+    }
+    if (!searching)
+        return;
+    var params = get_params();
+    params.s = term;
+    history.replaceState(null, null, parse_params(params));
+
+    searchbtn.classList.add("show");
+    searchbtn.firstChild.nodeValue = "Reset Search";
+    // calculate percent matched, excluding vertical overlap
+    var count = 0;
+    var lastx = -1;
+    var lastw = 0;
+    var keys = Array();
+    for (k in matches) {
+        if (matches.hasOwnProperty(k))
+            keys.push(k);
+    }
+    // sort the matched frames by their x location
+    // ascending, then width descending
+    keys.sort(function(a, b){
+        return a - b;
+    });
+    // Step through frames saving only the biggest bottom-up frames
+    // thanks to the sort order. This relies on the tree property
+    // where children are always smaller than their parents.
+    for (var k in keys) {
+        var x = parseInt(keys[k]);
+        var w = matches[keys[k]];
+        if (x >= lastx + lastw) {
+            count += w;
+            lastx = x;
+            lastw = w;
+        }
+    }
+    // display matched percent
+    matchedtxt.classList.remove("hide");
+    var pct = 100 * count / maxwidth;
+    if (pct != 100) pct = pct.toFixed(1);
+    matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+}
+function format_percent(n) {
+    return n.toFixed(4) + "%";
+}
+]]></script><rect x="0" y="0" width="100%" height="794" fill="url(#background)"/><text id="title" x="50.0000%" y="24.00">py-spy record --native -o profile6.svg -- python parallel.py</text><text id="details" x="10" y="40.00"> </text><text id="unzoom" class="hide" x="10" y="24.00">Reset Zoom</text><text id="search" x="1190" y="24.00">Search</text><text id="matched" x="1190" y="783.00"> </text><svg id="frames" x="10" width="1180" total_samples="104"><g><title>&lt;module&gt; (parallel.py:93) (1 samples, 0.96%)</title><rect x="16.3462%" y="84" width="0.9615%" height="15" fill="rgb(227,0,7)" fg:x="17" fg:w="1"/><text x="16.5962%" y="94.50"></text></g><g><title>ukf_pyrs::parallel::_::_$LT$impl$u20$pyo3..impl_..pyclass..PyMethods$LT$ukf_pyrs..parallel..UKFParallel$GT$$u20$for$u20$pyo3..impl_..pyclass..PyClassImplCollector$LT$ukf_pyrs..parallel..UKFParallel$GT$$GT$::py_methods::ITEMS::trampoline::h6b799e602beb4b72 (parallel.rs:69) (1 samples, 0.96%)</title><rect x="16.3462%" y="100" width="0.9615%" height="15" fill="rgb(217,0,24)" fg:x="17" fg:w="1"/><text x="16.5962%" y="110.50"></text></g><g><title>pyo3::impl_::trampoline::fastcall_with_keywords::h65f1f230947ccfbc (trampoline.rs:42) (1 samples, 0.96%)</title><rect x="16.3462%" y="116" width="0.9615%" height="15" fill="rgb(221,193,54)" fg:x="17" fg:w="1"/><text x="16.5962%" y="126.50"></text></g><g><title>pyo3::impl_::trampoline::trampoline_inner::he33ce43d78f9573e (trampoline.rs:181) (1 samples, 0.96%)</title><rect x="16.3462%" y="132" width="0.9615%" height="15" fill="rgb(248,212,6)" fg:x="17" fg:w="1"/><text x="16.5962%" y="142.50"></text></g><g><title>std::panic::catch_unwind::h0fa6730d9c2e104c (panic.rs) (1 samples, 0.96%)</title><rect x="16.3462%" y="148" width="0.9615%" height="15" fill="rgb(208,68,35)" fg:x="17" fg:w="1"/><text x="16.5962%" y="158.50"></text></g><g><title>std::panicking::try::h9aa43094401fca5c (panicking.rs:451) (1 samples, 0.96%)</title><rect x="16.3462%" y="164" width="0.9615%" height="15" fill="rgb(232,128,0)" fg:x="17" fg:w="1"/><text x="16.5962%" y="174.50"></text></g><g><title>__rust_try (ukf_pyrs/ukf_pyrs.cpython-311-x86_64-linux-gnu.so) (1 samples, 0.96%)</title><rect x="16.3462%" y="180" width="0.9615%" height="15" fill="rgb(207,160,47)" fg:x="17" fg:w="1"/><text x="16.5962%" y="190.50"></text></g><g><title>std::panicking::try::do_call::ha6b20eac67a298bc (panicking.rs:487) (1 samples, 0.96%)</title><rect x="16.3462%" y="196" width="0.9615%" height="15" fill="rgb(228,23,34)" fg:x="17" fg:w="1"/><text x="16.5962%" y="206.50"></text></g><g><title>core::mem::manually_drop::ManuallyDrop$LT$T$GT$::new::hf6ae17c7b4533421 (manually_drop.rs:71) (1 samples, 0.96%)</title><rect x="16.3462%" y="212" width="0.9615%" height="15" fill="rgb(218,30,26)" fg:x="17" fg:w="1"/><text x="16.5962%" y="222.50"></text></g><g><title>pyo3::impl_::trampoline::trampoline_inner::_$u7b$$u7b$closure$u7d$$u7d$::hc9c8d9b76813cb82 (trampoline.rs:181) (1 samples, 0.96%)</title><rect x="16.3462%" y="228" width="0.9615%" height="15" fill="rgb(220,122,19)" fg:x="17" fg:w="1"/><text x="16.5962%" y="238.50"></text></g><g><title>pyo3::impl_::trampoline::fastcall_with_keywords::_$u7b$$u7b$closure$u7d$$u7d$::h0bd8f30ec68721b8 (trampoline.rs:41) (1 samples, 0.96%)</title><rect x="16.3462%" y="244" width="0.9615%" height="15" fill="rgb(250,228,42)" fg:x="17" fg:w="1"/><text x="16.5962%" y="254.50"></text></g><g><title>ukf_pyrs::parallel::_::_$LT$impl$u20$ukf_pyrs..parallel..UKFParallel$GT$::__pymethod_update_measurement_context__::hea3c00cadd875825 (parallel.rs:69) (1 samples, 0.96%)</title><rect x="16.3462%" y="260" width="0.9615%" height="15" fill="rgb(240,193,28)" fg:x="17" fg:w="1"/><text x="16.5962%" y="270.50"></text></g><g><title>pyo3::types::any::PyAny::downcast::h3f4cec4c508f72b0 (any.rs:823) (1 samples, 0.96%)</title><rect x="16.3462%" y="276" width="0.9615%" height="15" fill="rgb(216,20,37)" fg:x="17" fg:w="1"/><text x="16.5962%" y="286.50"></text></g><g><title>_$LT$pyo3..pycell..PyCell$LT$T$GT$$u20$as$u20$pyo3..conversion..PyTryFrom$GT$::try_from::hba362a05b05b483e (conversion.rs:497) (1 samples, 0.96%)</title><rect x="16.3462%" y="292" width="0.9615%" height="15" fill="rgb(206,188,39)" fg:x="17" fg:w="1"/><text x="16.5962%" y="302.50"></text></g><g><title>pyo3::type_object::PyTypeInfo::is_type_of::h2bf1e8053e303312 (type_object.rs:58) (1 samples, 0.96%)</title><rect x="16.3462%" y="308" width="0.9615%" height="15" fill="rgb(217,207,13)" fg:x="17" fg:w="1"/><text x="16.5962%" y="318.50"></text></g><g><title>ukf_pyrs::parallel::_::_$LT$impl$u20$pyo3..type_object..PyTypeInfo$u20$for$u20$ukf_pyrs..parallel..UKFParallel$GT$::type_object_raw::h67a08e10faf9c143 (parallel.rs:14) (1 samples, 0.96%)</title><rect x="16.3462%" y="324" width="0.9615%" height="15" fill="rgb(231,73,38)" fg:x="17" fg:w="1"/><text x="16.5962%" y="334.50"></text></g><g><title>pyo3::impl_::pyclass::lazy_type_object::LazyTypeObject$LT$T$GT$::get_or_init::h9faaeed01a170a01 (lazy_type_object.rs:54) (1 samples, 0.96%)</title><rect x="16.3462%" y="340" width="0.9615%" height="15" fill="rgb(225,20,46)" fg:x="17" fg:w="1"/><text x="16.5962%" y="350.50"></text></g><g><title>core::result::Result$LT$T$C$E$GT$::unwrap_or_else::hb66b32ba67f6dfb1 (result.rs:1467) (1 samples, 0.96%)</title><rect x="16.3462%" y="356" width="0.9615%" height="15" fill="rgb(210,31,41)" fg:x="17" fg:w="1"/><text x="16.5962%" y="366.50"></text></g><g><title>&lt;module&gt; (parallel.py:94) (28 samples, 26.92%)</title><rect x="17.3077%" y="84" width="26.9231%" height="15" fill="rgb(221,200,47)" fg:x="18" fg:w="28"/><text x="17.5577%" y="94.50">&lt;module&gt; (parallel.py:94)</text></g><g><title>ukf_pyrs::parallel::_::_$LT$impl$u20$pyo3..impl_..pyclass..PyMethods$LT$ukf_pyrs..parallel..UKFParallel$GT$$u20$for$u20$pyo3..impl_..pyclass..PyClassImplCollector$LT$ukf_pyrs..parallel..UKFParallel$GT$$GT$::py_methods::ITEMS::trampoline::h03738b58cafde616 (parallel.rs:69) (28 samples, 26.92%)</title><rect x="17.3077%" y="100" width="26.9231%" height="15" fill="rgb(226,26,5)" fg:x="18" fg:w="28"/><text x="17.5577%" y="110.50">ukf_pyrs::parallel::_::_$LT$impl$u20$pyo3....</text></g><g><title>pyo3::impl_::trampoline::fastcall_with_keywords::h65f1f230947ccfbc (trampoline.rs:42) (28 samples, 26.92%)</title><rect x="17.3077%" y="116" width="26.9231%" height="15" fill="rgb(249,33,26)" fg:x="18" fg:w="28"/><text x="17.5577%" y="126.50">pyo3::impl_::trampoline::fastcall_with_keyw..</text></g><g><title>pyo3::impl_::trampoline::trampoline_inner::he33ce43d78f9573e (trampoline.rs:181) (28 samples, 26.92%)</title><rect x="17.3077%" y="132" width="26.9231%" height="15" fill="rgb(235,183,28)" fg:x="18" fg:w="28"/><text x="17.5577%" y="142.50">pyo3::impl_::trampoline::trampoline_inner::..</text></g><g><title>std::panic::catch_unwind::h0fa6730d9c2e104c (panic.rs) (28 samples, 26.92%)</title><rect x="17.3077%" y="148" width="26.9231%" height="15" fill="rgb(221,5,38)" fg:x="18" fg:w="28"/><text x="17.5577%" y="158.50">std::panic::catch_unwind::h0fa6730d9c2e104c..</text></g><g><title>std::panicking::try::h9aa43094401fca5c (panicking.rs:451) (28 samples, 26.92%)</title><rect x="17.3077%" y="164" width="26.9231%" height="15" fill="rgb(247,18,42)" fg:x="18" fg:w="28"/><text x="17.5577%" y="174.50">std::panicking::try::h9aa43094401fca5c (pan..</text></g><g><title>__rust_try (ukf_pyrs/ukf_pyrs.cpython-311-x86_64-linux-gnu.so) (28 samples, 26.92%)</title><rect x="17.3077%" y="180" width="26.9231%" height="15" fill="rgb(241,131,45)" fg:x="18" fg:w="28"/><text x="17.5577%" y="190.50">__rust_try (ukf_pyrs/ukf_pyrs.cpython-311-x..</text></g><g><title>std::panicking::try::do_call::ha6b20eac67a298bc (panicking.rs:487) (28 samples, 26.92%)</title><rect x="17.3077%" y="196" width="26.9231%" height="15" fill="rgb(249,31,29)" fg:x="18" fg:w="28"/><text x="17.5577%" y="206.50">std::panicking::try::do_call::ha6b20eac67a2..</text></g><g><title>core::mem::manually_drop::ManuallyDrop$LT$T$GT$::new::hf6ae17c7b4533421 (manually_drop.rs:71) (28 samples, 26.92%)</title><rect x="17.3077%" y="212" width="26.9231%" height="15" fill="rgb(225,111,53)" fg:x="18" fg:w="28"/><text x="17.5577%" y="222.50">core::mem::manually_drop::ManuallyDrop$LT$T..</text></g><g><title>pyo3::impl_::trampoline::trampoline_inner::_$u7b$$u7b$closure$u7d$$u7d$::hc9c8d9b76813cb82 (trampoline.rs:181) (28 samples, 26.92%)</title><rect x="17.3077%" y="228" width="26.9231%" height="15" fill="rgb(238,160,17)" fg:x="18" fg:w="28"/><text x="17.5577%" y="238.50">pyo3::impl_::trampoline::trampoline_inner::..</text></g><g><title>pyo3::impl_::trampoline::fastcall_with_keywords::_$u7b$$u7b$closure$u7d$$u7d$::h0bd8f30ec68721b8 (trampoline.rs:41) (28 samples, 26.92%)</title><rect x="17.3077%" y="244" width="26.9231%" height="15" fill="rgb(214,148,48)" fg:x="18" fg:w="28"/><text x="17.5577%" y="254.50">pyo3::impl_::trampoline::fastcall_with_keyw..</text></g><g><title>ukf_pyrs::parallel::_::_$LT$impl$u20$ukf_pyrs..parallel..UKFParallel$GT$::__pymethod_predict__::hd104acbfe3dcacf0 (parallel.rs:69) (28 samples, 26.92%)</title><rect x="17.3077%" y="260" width="26.9231%" height="15" fill="rgb(232,36,49)" fg:x="18" fg:w="28"/><text x="17.5577%" y="270.50">ukf_pyrs::parallel::_::_$LT$impl$u20$ukf_py..</text></g><g><title>ukf_pyrs::parallel::UKFParallel::py_predict::h46c8ee9c56b98def (parallel.rs:90) (28 samples, 26.92%)</title><rect x="17.3077%" y="276" width="26.9231%" height="15" fill="rgb(209,103,24)" fg:x="18" fg:w="28"/><text x="17.5577%" y="286.50">ukf_pyrs::parallel::UKFParallel::py_predict..</text></g><g><title>pyo3::marker::Python::allow_threads::h5202e8c793390b90 (marker.rs:543) (28 samples, 26.92%)</title><rect x="17.3077%" y="292" width="26.9231%" height="15" fill="rgb(229,88,8)" fg:x="18" fg:w="28"/><text x="17.5577%" y="302.50">pyo3::marker::Python::allow_threads::h5202e..</text></g><g><title>ukf_pyrs::parallel::UKFParallel::py_predict::_$u7b$$u7b$closure$u7d$$u7d$::hfacc8c5b034b5cad (parallel.rs:91) (28 samples, 26.92%)</title><rect x="17.3077%" y="308" width="26.9231%" height="15" fill="rgb(213,181,19)" fg:x="18" fg:w="28"/><text x="17.5577%" y="318.50">ukf_pyrs::parallel::UKFParallel::py_predict..</text></g><g><title>ukf_pyrs::parallel::UKFParallel::predict::hc2c0df02caa084c4 (parallel.rs:25) (28 samples, 26.92%)</title><rect x="17.3077%" y="324" width="26.9231%" height="15" fill="rgb(254,191,54)" fg:x="18" fg:w="28"/><text x="17.5577%" y="334.50">ukf_pyrs::parallel::UKFParallel::predict::h..</text></g><g><title>rayon::iter::ParallelIterator::try_for_each::h16afd4b883168cca (mod.rs:477) (28 samples, 26.92%)</title><rect x="17.3077%" y="340" width="26.9231%" height="15" fill="rgb(241,83,37)" fg:x="18" fg:w="28"/><text x="17.5577%" y="350.50">rayon::iter::ParallelIterator::try_for_each..</text></g><g><title>rayon::iter::ParallelIterator::try_reduce::hfdd3718118ea793a (mod.rs:1081) (28 samples, 26.92%)</title><rect x="17.3077%" y="356" width="26.9231%" height="15" fill="rgb(233,36,39)" fg:x="18" fg:w="28"/><text x="17.5577%" y="366.50">rayon::iter::ParallelIterator::try_reduce::..</text></g><g><title>rayon::iter::try_reduce::try_reduce::h1dad1085a982994d (try_reduce.rs:21) (28 samples, 26.92%)</title><rect x="17.3077%" y="372" width="26.9231%" height="15" fill="rgb(226,3,54)" fg:x="18" fg:w="28"/><text x="17.5577%" y="382.50">rayon::iter::try_reduce::try_reduce::h1dad1..</text></g><g><title>_$LT$rayon..iter..map..Map$LT$I$C$F$GT$$u20$as$u20$rayon..iter..ParallelIterator$GT$::drive_unindexed::h7c634a5c854b25a7 (map.rs:49) (28 samples, 26.92%)</title><rect x="17.3077%" y="388" width="26.9231%" height="15" fill="rgb(245,192,40)" fg:x="18" fg:w="28"/><text x="17.5577%" y="398.50">_$LT$rayon..iter..map..Map$LT$I$C$F$GT$$u20..</text></g><g><title>_$LT$rayon..slice..IterMut$LT$T$GT$$u20$as$u20$rayon..iter..ParallelIterator$GT$::drive_unindexed::h8bd5d931f518f518 (mod.rs:850) (28 samples, 26.92%)</title><rect x="17.3077%" y="404" width="26.9231%" height="15" fill="rgb(238,167,29)" fg:x="18" fg:w="28"/><text x="17.5577%" y="414.50">_$LT$rayon..slice..IterMut$LT$T$GT$$u20$as$..</text></g><g><title>rayon::iter::plumbing::bridge::h9becb1018ab47fd9 (mod.rs:357) (28 samples, 26.92%)</title><rect x="17.3077%" y="420" width="26.9231%" height="15" fill="rgb(232,182,51)" fg:x="18" fg:w="28"/><text x="17.5577%" y="430.50">rayon::iter::plumbing::bridge::h9becb1018ab..</text></g><g><title>_$LT$rayon..slice..IterMut$LT$T$GT$$u20$as$u20$rayon..iter..IndexedParallelIterator$GT$::with_producer::hfce0baa127b5f2ff (mod.rs:874) (28 samples, 26.92%)</title><rect x="17.3077%" y="436" width="26.9231%" height="15" fill="rgb(231,60,39)" fg:x="18" fg:w="28"/><text x="17.5577%" y="446.50">_$LT$rayon..slice..IterMut$LT$T$GT$$u20$as$..</text></g><g><title>_$LT$rayon..iter..plumbing..bridge..Callback$LT$C$GT$$u20$as$u20$rayon..iter..plumbing..ProducerCallback$LT$I$GT$$GT$::callback::h0e3a790f419e3731 (mod.rs:374) (28 samples, 26.92%)</title><rect x="17.3077%" y="452" width="26.9231%" height="15" fill="rgb(208,69,12)" fg:x="18" fg:w="28"/><text x="17.5577%" y="462.50">_$LT$rayon..iter..plumbing..bridge..Callbac..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::h516852305db37301 (mod.rs:397) (28 samples, 26.92%)</title><rect x="17.3077%" y="468" width="26.9231%" height="15" fill="rgb(235,93,37)" fg:x="18" fg:w="28"/><text x="17.5577%" y="478.50">rayon::iter::plumbing::bridge_producer_cons..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper::hf1bcae1b9978ea78 (mod.rs:416) (28 samples, 26.92%)</title><rect x="17.3077%" y="484" width="26.9231%" height="15" fill="rgb(213,116,39)" fg:x="18" fg:w="28"/><text x="17.5577%" y="494.50">rayon::iter::plumbing::bridge_producer_cons..</text></g><g><title>rayon_core::join::join_context::h6695f684bc452e39 (mod.rs:175) (28 samples, 26.92%)</title><rect x="17.3077%" y="500" width="26.9231%" height="15" fill="rgb(222,207,29)" fg:x="18" fg:w="28"/><text x="17.5577%" y="510.50">rayon_core::join::join_context::h6695f684bc..</text></g><g><title>rayon_core::registry::in_worker::h5fb42585b9781843 (registry.rs:986) (28 samples, 26.92%)</title><rect x="17.3077%" y="516" width="26.9231%" height="15" fill="rgb(206,96,30)" fg:x="18" fg:w="28"/><text x="17.5577%" y="526.50">rayon_core::registry::in_worker::h5fb42585b..</text></g><g><title>rayon_core::registry::Registry::in_worker::h95933548001882c8 (registry.rs:514) (28 samples, 26.92%)</title><rect x="17.3077%" y="532" width="26.9231%" height="15" fill="rgb(218,138,4)" fg:x="18" fg:w="28"/><text x="17.5577%" y="542.50">rayon_core::registry::Registry::in_worker::..</text></g><g><title>rayon_core::registry::Registry::in_worker_cold::h85caef02881da442 (registry.rs:553) (28 samples, 26.92%)</title><rect x="17.3077%" y="548" width="26.9231%" height="15" fill="rgb(250,191,14)" fg:x="18" fg:w="28"/><text x="17.5577%" y="558.50">rayon_core::registry::Registry::in_worker_c..</text></g><g><title>std::thread::local::LocalKey$LT$T$GT$::with::hb834f031582185fa (local.rs) (28 samples, 26.92%)</title><rect x="17.3077%" y="564" width="26.9231%" height="15" fill="rgb(239,60,40)" fg:x="18" fg:w="28"/><text x="17.5577%" y="574.50">std::thread::local::LocalKey$LT$T$GT$::with..</text></g><g><title>std::thread::local::LocalKey$LT$T$GT$::try_with::h75748b597554d1f8 (local.rs:446) (28 samples, 26.92%)</title><rect x="17.3077%" y="580" width="26.9231%" height="15" fill="rgb(206,27,48)" fg:x="18" fg:w="28"/><text x="17.5577%" y="590.50">std::thread::local::LocalKey$LT$T$GT$::try_..</text></g><g><title>rayon_core::registry::Registry::in_worker_cold::_$u7b$$u7b$closure$u7d$$u7d$::he5bd16e211d34ea1 (registry.rs:546) (28 samples, 26.92%)</title><rect x="17.3077%" y="596" width="26.9231%" height="15" fill="rgb(225,35,8)" fg:x="18" fg:w="28"/><text x="17.5577%" y="606.50">rayon_core::registry::Registry::in_worker_c..</text></g><g><title>rayon_core::latch::LockLatch::wait_and_reset::hc6cbd7a7f2303490 (latch.rs:249) (28 samples, 26.92%)</title><rect x="17.3077%" y="612" width="26.9231%" height="15" fill="rgb(250,213,24)" fg:x="18" fg:w="28"/><text x="17.5577%" y="622.50">rayon_core::latch::LockLatch::wait_and_rese..</text></g><g><title>std::sync::condvar::Condvar::wait::h6a9f2fd76763ceb6 (condvar.rs:191) (28 samples, 26.92%)</title><rect x="17.3077%" y="628" width="26.9231%" height="15" fill="rgb(247,123,22)" fg:x="18" fg:w="28"/><text x="17.5577%" y="638.50">std::sync::condvar::Condvar::wait::h6a9f2fd..</text></g><g><title>std::sys::unix::locks::futex_condvar::Condvar::wait::hf22731ec5baf3b78 (futex_condvar.rs:33) (28 samples, 26.92%)</title><rect x="17.3077%" y="644" width="26.9231%" height="15" fill="rgb(231,138,38)" fg:x="18" fg:w="28"/><text x="17.5577%" y="654.50">std::sys::unix::locks::futex_condvar::Condv..</text></g><g><title>std::sys::unix::locks::futex_condvar::Condvar::wait_optional_timeout::hbec800d2c6296a82 (futex_condvar.rs:49) (28 samples, 26.92%)</title><rect x="17.3077%" y="660" width="26.9231%" height="15" fill="rgb(231,145,46)" fg:x="18" fg:w="28"/><text x="17.5577%" y="670.50">std::sys::unix::locks::futex_condvar::Condv..</text></g><g><title>std::sys::unix::futex::futex_wait::hd6e3d0362bdf0d86 (futex.rs:77) (28 samples, 26.92%)</title><rect x="17.3077%" y="676" width="26.9231%" height="15" fill="rgb(251,118,11)" fg:x="18" fg:w="28"/><text x="17.5577%" y="686.50">std::sys::unix::futex::futex_wait::hd6e3d03..</text></g><g><title>syscall (libc.so.6) (28 samples, 26.92%)</title><rect x="17.3077%" y="692" width="26.9231%" height="15" fill="rgb(217,147,25)" fg:x="18" fg:w="28"/><text x="17.5577%" y="702.50">syscall (libc.so.6)</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::hc35aeecefcc4bbb5 (mod.rs:396) (1 samples, 0.96%)</title><rect x="44.2308%" y="532" width="0.9615%" height="15" fill="rgb(247,81,37)" fg:x="46" fg:w="1"/><text x="44.4808%" y="542.50"></text></g><g><title>rayon::iter::plumbing::LengthSplitter::new::hd2b0303d4c0e9207 (mod.rs:315) (1 samples, 0.96%)</title><rect x="44.2308%" y="548" width="0.9615%" height="15" fill="rgb(209,12,38)" fg:x="46" fg:w="1"/><text x="44.4808%" y="558.50"></text></g><g><title>rayon::iter::plumbing::Splitter::new::h6799cf4473deddb3 (mod.rs:266) (1 samples, 0.96%)</title><rect x="44.2308%" y="564" width="0.9615%" height="15" fill="rgb(227,1,9)" fg:x="46" fg:w="1"/><text x="44.4808%" y="574.50"></text></g><g><title>rayon_core::current_num_threads::he7db603680582798 (lib.rs:139) (1 samples, 0.96%)</title><rect x="44.2308%" y="580" width="0.9615%" height="15" fill="rgb(248,47,43)" fg:x="46" fg:w="1"/><text x="44.4808%" y="590.50"></text></g><g><title>ukf_pyrs::parallel::UKFParallel::py_update::h4c1390f6e300897f (parallel.rs:107) (45 samples, 43.27%)</title><rect x="44.2308%" y="276" width="43.2692%" height="15" fill="rgb(221,10,30)" fg:x="46" fg:w="45"/><text x="44.4808%" y="286.50">ukf_pyrs::parallel::UKFParallel::py_update::h4c1390f6e300897f (parallel..</text></g><g><title>pyo3::marker::Python::allow_threads::h08c755a346b3721f (marker.rs:543) (45 samples, 43.27%)</title><rect x="44.2308%" y="292" width="43.2692%" height="15" fill="rgb(210,229,1)" fg:x="46" fg:w="45"/><text x="44.4808%" y="302.50">pyo3::marker::Python::allow_threads::h08c755a346b3721f (marker.rs:543)</text></g><g><title>ukf_pyrs::parallel::UKFParallel::py_update::_$u7b$$u7b$closure$u7d$$u7d$::h924ecd929f34ba95 (parallel.rs:108) (45 samples, 43.27%)</title><rect x="44.2308%" y="308" width="43.2692%" height="15" fill="rgb(222,148,37)" fg:x="46" fg:w="45"/><text x="44.4808%" y="318.50">ukf_pyrs::parallel::UKFParallel::py_update::_$u7b$$u7b$closure$u7d$$u7d..</text></g><g><title>ukf_pyrs::parallel::UKFParallel::update::he82dd7e3a40e1b32 (parallel.rs:40) (45 samples, 43.27%)</title><rect x="44.2308%" y="324" width="43.2692%" height="15" fill="rgb(234,67,33)" fg:x="46" fg:w="45"/><text x="44.4808%" y="334.50">ukf_pyrs::parallel::UKFParallel::update::he82dd7e3a40e1b32 (parallel.rs..</text></g><g><title>rayon::iter::ParallelIterator::try_for_each::h437978df49bb9a7f (mod.rs:477) (45 samples, 43.27%)</title><rect x="44.2308%" y="340" width="43.2692%" height="15" fill="rgb(247,98,35)" fg:x="46" fg:w="45"/><text x="44.4808%" y="350.50">rayon::iter::ParallelIterator::try_for_each::h437978df49bb9a7f (mod.rs:..</text></g><g><title>rayon::iter::ParallelIterator::try_reduce::h6757b40c800b981e (mod.rs:1081) (45 samples, 43.27%)</title><rect x="44.2308%" y="356" width="43.2692%" height="15" fill="rgb(247,138,52)" fg:x="46" fg:w="45"/><text x="44.4808%" y="366.50">rayon::iter::ParallelIterator::try_reduce::h6757b40c800b981e (mod.rs:10..</text></g><g><title>rayon::iter::try_reduce::try_reduce::h74d84ef68a430063 (try_reduce.rs:21) (45 samples, 43.27%)</title><rect x="44.2308%" y="372" width="43.2692%" height="15" fill="rgb(213,79,30)" fg:x="46" fg:w="45"/><text x="44.4808%" y="382.50">rayon::iter::try_reduce::try_reduce::h74d84ef68a430063 (try_reduce.rs:2..</text></g><g><title>_$LT$rayon..iter..map..Map$LT$I$C$F$GT$$u20$as$u20$rayon..iter..ParallelIterator$GT$::drive_unindexed::h54d4541d006b39c8 (map.rs:49) (45 samples, 43.27%)</title><rect x="44.2308%" y="388" width="43.2692%" height="15" fill="rgb(246,177,23)" fg:x="46" fg:w="45"/><text x="44.4808%" y="398.50">_$LT$rayon..iter..map..Map$LT$I$C$F$GT$$u20$as$u20$rayon..iter..Paralle..</text></g><g><title>_$LT$rayon..iter..zip..Zip$LT$A$C$B$GT$$u20$as$u20$rayon..iter..ParallelIterator$GT$::drive_unindexed::h5ddd253b61f5c2ff (zip.rs:42) (45 samples, 43.27%)</title><rect x="44.2308%" y="404" width="43.2692%" height="15" fill="rgb(230,62,27)" fg:x="46" fg:w="45"/><text x="44.4808%" y="414.50">_$LT$rayon..iter..zip..Zip$LT$A$C$B$GT$$u20$as$u20$rayon..iter..Paralle..</text></g><g><title>rayon::iter::plumbing::bridge::ha8b81cea1826cfe4 (mod.rs:357) (45 samples, 43.27%)</title><rect x="44.2308%" y="420" width="43.2692%" height="15" fill="rgb(216,154,8)" fg:x="46" fg:w="45"/><text x="44.4808%" y="430.50">rayon::iter::plumbing::bridge::ha8b81cea1826cfe4 (mod.rs:357)</text></g><g><title>_$LT$rayon..iter..zip..Zip$LT$A$C$B$GT$$u20$as$u20$rayon..iter..IndexedParallelIterator$GT$::with_producer::hd09add978a653b53 (zip.rs:119) (45 samples, 43.27%)</title><rect x="44.2308%" y="436" width="43.2692%" height="15" fill="rgb(244,35,45)" fg:x="46" fg:w="45"/><text x="44.4808%" y="446.50">_$LT$rayon..iter..zip..Zip$LT$A$C$B$GT$$u20$as$u20$rayon..iter..Indexed..</text></g><g><title>_$LT$rayon..slice..IterMut$LT$T$GT$$u20$as$u20$rayon..iter..IndexedParallelIterator$GT$::with_producer::hd11e767ac1c27b0e (mod.rs:874) (45 samples, 43.27%)</title><rect x="44.2308%" y="452" width="43.2692%" height="15" fill="rgb(251,115,12)" fg:x="46" fg:w="45"/><text x="44.4808%" y="462.50">_$LT$rayon..slice..IterMut$LT$T$GT$$u20$as$u20$rayon..iter..IndexedPara..</text></g><g><title>_$LT$$LT$rayon..iter..zip..Zip$LT$A$C$B$GT$$u20$as$u20$rayon..iter..IndexedParallelIterator$GT$..with_producer..CallbackA$LT$CB$C$B$GT$$u20$as$u20$rayon..iter..plumbing..ProducerCallback$LT$ITEM$GT$$GT$::callback::h894a215d7f60063d (zip.rs:94) (45 samples, 43.27%)</title><rect x="44.2308%" y="468" width="43.2692%" height="15" fill="rgb(240,54,50)" fg:x="46" fg:w="45"/><text x="44.4808%" y="478.50">_$LT$$LT$rayon..iter..zip..Zip$LT$A$C$B$GT$$u20$as$u20$rayon..iter..Ind..</text></g><g><title>_$LT$rayon..slice..Iter$LT$T$GT$$u20$as$u20$rayon..iter..IndexedParallelIterator$GT$::with_producer::h99bdf5d188d2ba8c (mod.rs:733) (45 samples, 43.27%)</title><rect x="44.2308%" y="484" width="43.2692%" height="15" fill="rgb(233,84,52)" fg:x="46" fg:w="45"/><text x="44.4808%" y="494.50">_$LT$rayon..slice..Iter$LT$T$GT$$u20$as$u20$rayon..iter..IndexedParalle..</text></g><g><title>_$LT$$LT$rayon..iter..zip..Zip$LT$A$C$B$GT$$u20$as$u20$rayon..iter..IndexedParallelIterator$GT$..with_producer..CallbackB$LT$CB$C$A$GT$$u20$as$u20$rayon..iter..plumbing..ProducerCallback$LT$ITEM$GT$$GT$::callback::h8d55d5ba63cc74c0 (zip.rs:117) (45 samples, 43.27%)</title><rect x="44.2308%" y="500" width="43.2692%" height="15" fill="rgb(207,117,47)" fg:x="46" fg:w="45"/><text x="44.4808%" y="510.50">_$LT$$LT$rayon..iter..zip..Zip$LT$A$C$B$GT$$u20$as$u20$rayon..iter..Ind..</text></g><g><title>_$LT$rayon..iter..plumbing..bridge..Callback$LT$C$GT$$u20$as$u20$rayon..iter..plumbing..ProducerCallback$LT$I$GT$$GT$::callback::h18358a97d97400e9 (mod.rs:374) (45 samples, 43.27%)</title><rect x="44.2308%" y="516" width="43.2692%" height="15" fill="rgb(249,43,39)" fg:x="46" fg:w="45"/><text x="44.4808%" y="526.50">_$LT$rayon..iter..plumbing..bridge..Callback$LT$C$GT$$u20$as$u20$rayon...</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::hc35aeecefcc4bbb5 (mod.rs:397) (44 samples, 42.31%)</title><rect x="45.1923%" y="532" width="42.3077%" height="15" fill="rgb(209,38,44)" fg:x="47" fg:w="44"/><text x="45.4423%" y="542.50">rayon::iter::plumbing::bridge_producer_consumer::hc35aeecefcc4bbb5 (m..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper::h5308e8c7e9d6063e (mod.rs:416) (44 samples, 42.31%)</title><rect x="45.1923%" y="548" width="42.3077%" height="15" fill="rgb(236,212,23)" fg:x="47" fg:w="44"/><text x="45.4423%" y="558.50">rayon::iter::plumbing::bridge_producer_consumer::helper::h5308e8c7e9d..</text></g><g><title>rayon_core::join::join_context::ha6faac6effa5de3e (mod.rs:175) (44 samples, 42.31%)</title><rect x="45.1923%" y="564" width="42.3077%" height="15" fill="rgb(242,79,21)" fg:x="47" fg:w="44"/><text x="45.4423%" y="574.50">rayon_core::join::join_context::ha6faac6effa5de3e (mod.rs:175)</text></g><g><title>rayon_core::registry::in_worker::h6f538fb48c5e0fa3 (registry.rs:986) (44 samples, 42.31%)</title><rect x="45.1923%" y="580" width="42.3077%" height="15" fill="rgb(211,96,35)" fg:x="47" fg:w="44"/><text x="45.4423%" y="590.50">rayon_core::registry::in_worker::h6f538fb48c5e0fa3 (registry.rs:986)</text></g><g><title>rayon_core::registry::Registry::in_worker::h74d15ec62843f68c (registry.rs:514) (44 samples, 42.31%)</title><rect x="45.1923%" y="596" width="42.3077%" height="15" fill="rgb(253,215,40)" fg:x="47" fg:w="44"/><text x="45.4423%" y="606.50">rayon_core::registry::Registry::in_worker::h74d15ec62843f68c (registr..</text></g><g><title>rayon_core::registry::Registry::in_worker_cold::h48a03f00b09fab7c (registry.rs:553) (44 samples, 42.31%)</title><rect x="45.1923%" y="612" width="42.3077%" height="15" fill="rgb(211,81,21)" fg:x="47" fg:w="44"/><text x="45.4423%" y="622.50">rayon_core::registry::Registry::in_worker_cold::h48a03f00b09fab7c (re..</text></g><g><title>std::thread::local::LocalKey$LT$T$GT$::with::h2b82c00011334739 (local.rs) (44 samples, 42.31%)</title><rect x="45.1923%" y="628" width="42.3077%" height="15" fill="rgb(208,190,38)" fg:x="47" fg:w="44"/><text x="45.4423%" y="638.50">std::thread::local::LocalKey$LT$T$GT$::with::h2b82c00011334739 (local..</text></g><g><title>std::thread::local::LocalKey$LT$T$GT$::try_with::h81b91f80c37d5ea7 (local.rs:446) (44 samples, 42.31%)</title><rect x="45.1923%" y="644" width="42.3077%" height="15" fill="rgb(235,213,38)" fg:x="47" fg:w="44"/><text x="45.4423%" y="654.50">std::thread::local::LocalKey$LT$T$GT$::try_with::h81b91f80c37d5ea7 (l..</text></g><g><title>rayon_core::registry::Registry::in_worker_cold::_$u7b$$u7b$closure$u7d$$u7d$::hae0e4463a596216f (registry.rs:546) (44 samples, 42.31%)</title><rect x="45.1923%" y="660" width="42.3077%" height="15" fill="rgb(237,122,38)" fg:x="47" fg:w="44"/><text x="45.4423%" y="670.50">rayon_core::registry::Registry::in_worker_cold::_$u7b$$u7b$closure$u7..</text></g><g><title>rayon_core::latch::LockLatch::wait_and_reset::hc6cbd7a7f2303490 (latch.rs:249) (44 samples, 42.31%)</title><rect x="45.1923%" y="676" width="42.3077%" height="15" fill="rgb(244,218,35)" fg:x="47" fg:w="44"/><text x="45.4423%" y="686.50">rayon_core::latch::LockLatch::wait_and_reset::hc6cbd7a7f2303490 (latc..</text></g><g><title>std::sync::condvar::Condvar::wait::h6a9f2fd76763ceb6 (condvar.rs:191) (44 samples, 42.31%)</title><rect x="45.1923%" y="692" width="42.3077%" height="15" fill="rgb(240,68,47)" fg:x="47" fg:w="44"/><text x="45.4423%" y="702.50">std::sync::condvar::Condvar::wait::h6a9f2fd76763ceb6 (condvar.rs:191)</text></g><g><title>std::sys::unix::locks::futex_condvar::Condvar::wait::hf22731ec5baf3b78 (futex_condvar.rs:33) (44 samples, 42.31%)</title><rect x="45.1923%" y="708" width="42.3077%" height="15" fill="rgb(210,16,53)" fg:x="47" fg:w="44"/><text x="45.4423%" y="718.50">std::sys::unix::locks::futex_condvar::Condvar::wait::hf22731ec5baf3b7..</text></g><g><title>std::sys::unix::locks::futex_condvar::Condvar::wait_optional_timeout::hbec800d2c6296a82 (futex_condvar.rs:49) (44 samples, 42.31%)</title><rect x="45.1923%" y="724" width="42.3077%" height="15" fill="rgb(235,124,12)" fg:x="47" fg:w="44"/><text x="45.4423%" y="734.50">std::sys::unix::locks::futex_condvar::Condvar::wait_optional_timeout:..</text></g><g><title>std::sys::unix::futex::futex_wait::hd6e3d0362bdf0d86 (futex.rs:77) (44 samples, 42.31%)</title><rect x="45.1923%" y="740" width="42.3077%" height="15" fill="rgb(224,169,11)" fg:x="47" fg:w="44"/><text x="45.4423%" y="750.50">std::sys::unix::futex::futex_wait::hd6e3d0362bdf0d86 (futex.rs:77)</text></g><g><title>syscall (libc.so.6) (44 samples, 42.31%)</title><rect x="45.1923%" y="756" width="42.3077%" height="15" fill="rgb(250,166,2)" fg:x="47" fg:w="44"/><text x="45.4423%" y="766.50">syscall (libc.so.6)</text></g><g><title>pyo3::impl_::trampoline::trampoline_inner::he33ce43d78f9573e (trampoline.rs:181) (47 samples, 45.19%)</title><rect x="44.2308%" y="132" width="45.1923%" height="15" fill="rgb(242,216,29)" fg:x="46" fg:w="47"/><text x="44.4808%" y="142.50">pyo3::impl_::trampoline::trampoline_inner::he33ce43d78f9573e (trampoline.r..</text></g><g><title>std::panic::catch_unwind::h0fa6730d9c2e104c (panic.rs) (47 samples, 45.19%)</title><rect x="44.2308%" y="148" width="45.1923%" height="15" fill="rgb(230,116,27)" fg:x="46" fg:w="47"/><text x="44.4808%" y="158.50">std::panic::catch_unwind::h0fa6730d9c2e104c (panic.rs)</text></g><g><title>std::panicking::try::h9aa43094401fca5c (panicking.rs:451) (47 samples, 45.19%)</title><rect x="44.2308%" y="164" width="45.1923%" height="15" fill="rgb(228,99,48)" fg:x="46" fg:w="47"/><text x="44.4808%" y="174.50">std::panicking::try::h9aa43094401fca5c (panicking.rs:451)</text></g><g><title>__rust_try (ukf_pyrs/ukf_pyrs.cpython-311-x86_64-linux-gnu.so) (47 samples, 45.19%)</title><rect x="44.2308%" y="180" width="45.1923%" height="15" fill="rgb(253,11,6)" fg:x="46" fg:w="47"/><text x="44.4808%" y="190.50">__rust_try (ukf_pyrs/ukf_pyrs.cpython-311-x86_64-linux-gnu.so)</text></g><g><title>std::panicking::try::do_call::ha6b20eac67a298bc (panicking.rs:487) (47 samples, 45.19%)</title><rect x="44.2308%" y="196" width="45.1923%" height="15" fill="rgb(247,143,39)" fg:x="46" fg:w="47"/><text x="44.4808%" y="206.50">std::panicking::try::do_call::ha6b20eac67a298bc (panicking.rs:487)</text></g><g><title>core::mem::manually_drop::ManuallyDrop$LT$T$GT$::new::hf6ae17c7b4533421 (manually_drop.rs:71) (47 samples, 45.19%)</title><rect x="44.2308%" y="212" width="45.1923%" height="15" fill="rgb(236,97,10)" fg:x="46" fg:w="47"/><text x="44.4808%" y="222.50">core::mem::manually_drop::ManuallyDrop$LT$T$GT$::new::hf6ae17c7b4533421 (m..</text></g><g><title>pyo3::impl_::trampoline::trampoline_inner::_$u7b$$u7b$closure$u7d$$u7d$::hc9c8d9b76813cb82 (trampoline.rs:181) (47 samples, 45.19%)</title><rect x="44.2308%" y="228" width="45.1923%" height="15" fill="rgb(233,208,19)" fg:x="46" fg:w="47"/><text x="44.4808%" y="238.50">pyo3::impl_::trampoline::trampoline_inner::_$u7b$$u7b$closure$u7d$$u7d$::h..</text></g><g><title>pyo3::impl_::trampoline::fastcall_with_keywords::_$u7b$$u7b$closure$u7d$$u7d$::h0bd8f30ec68721b8 (trampoline.rs:41) (47 samples, 45.19%)</title><rect x="44.2308%" y="244" width="45.1923%" height="15" fill="rgb(216,164,2)" fg:x="46" fg:w="47"/><text x="44.4808%" y="254.50">pyo3::impl_::trampoline::fastcall_with_keywords::_$u7b$$u7b$closure$u7d$$u..</text></g><g><title>ukf_pyrs::parallel::_::_$LT$impl$u20$ukf_pyrs..parallel..UKFParallel$GT$::__pymethod_update__::hb3249eaed505193b (parallel.rs:69) (47 samples, 45.19%)</title><rect x="44.2308%" y="260" width="45.1923%" height="15" fill="rgb(220,129,5)" fg:x="46" fg:w="47"/><text x="44.4808%" y="270.50">ukf_pyrs::parallel::_::_$LT$impl$u20$ukf_pyrs..parallel..UKFParallel$GT$::..</text></g><g><title>ukf_pyrs::parallel::UKFParallel::py_update::h4c1390f6e300897f (parallel.rs:111) (2 samples, 1.92%)</title><rect x="87.5000%" y="276" width="1.9231%" height="15" fill="rgb(242,17,10)" fg:x="91" fg:w="2"/><text x="87.7500%" y="286.50">u..</text></g><g><title>core::ptr::drop_in_place$LT$alloc..vec..Vec$LT$numpy..borrow..PyReadonlyArray$LT$f32$C$ndarray..dimension..dim..Dim$LT$$u5b$usize$u3b$$u20$1$u5d$$GT$$GT$$GT$$GT$::hb2bb71b50a03f6fc (mod.rs:490) (2 samples, 1.92%)</title><rect x="87.5000%" y="292" width="1.9231%" height="15" fill="rgb(242,107,0)" fg:x="91" fg:w="2"/><text x="87.7500%" y="302.50">c..</text></g><g><title>_$LT$alloc..vec..Vec$LT$T$C$A$GT$$u20$as$u20$core..ops..drop..Drop$GT$::drop::h594d5a79e646d201 (mod.rs:3033) (2 samples, 1.92%)</title><rect x="87.5000%" y="308" width="1.9231%" height="15" fill="rgb(251,28,31)" fg:x="91" fg:w="2"/><text x="87.7500%" y="318.50">_..</text></g><g><title>core::ptr::drop_in_place$LT$$u5b$numpy..borrow..PyReadonlyArray$LT$f32$C$ndarray..dimension..dim..Dim$LT$$u5b$usize$u3b$$u20$1$u5d$$GT$$GT$$u5d$$GT$::h531fe913d7155081 (mod.rs:490) (2 samples, 1.92%)</title><rect x="87.5000%" y="324" width="1.9231%" height="15" fill="rgb(233,223,10)" fg:x="91" fg:w="2"/><text x="87.7500%" y="334.50">c..</text></g><g><title>core::ptr::drop_in_place$LT$numpy..borrow..PyReadonlyArray$LT$f32$C$ndarray..dimension..dim..Dim$LT$$u5b$usize$u3b$$u20$1$u5d$$GT$$GT$$GT$::hb7e2fe6377cddbc2 (mod.rs:490) (2 samples, 1.92%)</title><rect x="87.5000%" y="340" width="1.9231%" height="15" fill="rgb(215,21,27)" fg:x="91" fg:w="2"/><text x="87.7500%" y="350.50">c..</text></g><g><title>_$LT$numpy..borrow..PyReadonlyArray$LT$T$C$D$GT$$u20$as$u20$core..ops..drop..Drop$GT$::drop::hf188982226837219 (mod.rs:343) (1 samples, 0.96%)</title><rect x="88.4615%" y="356" width="0.9615%" height="15" fill="rgb(232,23,21)" fg:x="92" fg:w="1"/><text x="88.7115%" y="366.50"></text></g><g><title>numpy::borrow::shared::release::hf42180601cc57d91 (shared.rs:204) (1 samples, 0.96%)</title><rect x="88.4615%" y="372" width="0.9615%" height="15" fill="rgb(244,5,23)" fg:x="92" fg:w="1"/><text x="88.7115%" y="382.50"></text></g><g><title>numpy::borrow::shared::release_shared::h93d23787bd3f2cb5 (shared.rs:88) (1 samples, 0.96%)</title><rect x="88.4615%" y="388" width="0.9615%" height="15" fill="rgb(226,81,46)" fg:x="92" fg:w="1"/><text x="88.7115%" y="398.50"></text></g><g><title>numpy::borrow::shared::BorrowFlags::release::h4500ba4cddf87f41 (shared.rs:306) (1 samples, 0.96%)</title><rect x="88.4615%" y="404" width="0.9615%" height="15" fill="rgb(247,70,30)" fg:x="92" fg:w="1"/><text x="88.7115%" y="414.50"></text></g><g><title>std::collections::hash::map::HashMap$LT$K$C$V$C$S$GT$::get_mut::hb9b9586ef770c70b (map.rs:1075) (1 samples, 0.96%)</title><rect x="88.4615%" y="420" width="0.9615%" height="15" fill="rgb(212,68,19)" fg:x="92" fg:w="1"/><text x="88.7115%" y="430.50"></text></g><g><title>hashbrown::map::HashMap$LT$K$C$V$C$S$C$A$GT$::get_mut::h8424f2a959a1115c (map.rs:1369) (1 samples, 0.96%)</title><rect x="88.4615%" y="436" width="0.9615%" height="15" fill="rgb(240,187,13)" fg:x="92" fg:w="1"/><text x="88.7115%" y="446.50"></text></g><g><title>hashbrown::map::HashMap$LT$K$C$V$C$S$C$A$GT$::get_inner_mut::hd9dab538af7cb5de (map.rs:1385) (1 samples, 0.96%)</title><rect x="88.4615%" y="452" width="0.9615%" height="15" fill="rgb(223,113,26)" fg:x="92" fg:w="1"/><text x="88.7115%" y="462.50"></text></g><g><title>hashbrown::raw::RawTable$LT$T$C$A$GT$::get_mut::h20a64cd9d01a789f (mod.rs:841) (1 samples, 0.96%)</title><rect x="88.4615%" y="468" width="0.9615%" height="15" fill="rgb(206,192,2)" fg:x="92" fg:w="1"/><text x="88.7115%" y="478.50"></text></g><g><title>hashbrown::raw::RawTable$LT$T$C$A$GT$::find::hbaeff49d5ad6e0aa (mod.rs:816) (1 samples, 0.96%)</title><rect x="88.4615%" y="484" width="0.9615%" height="15" fill="rgb(241,108,4)" fg:x="92" fg:w="1"/><text x="88.7115%" y="494.50"></text></g><g><title>hashbrown::raw::RawTableInner$LT$A$GT$::find_inner::hb8d8c930cac5a19b (mod.rs:1179) (1 samples, 0.96%)</title><rect x="88.4615%" y="500" width="0.9615%" height="15" fill="rgb(247,173,49)" fg:x="92" fg:w="1"/><text x="88.7115%" y="510.50"></text></g><g><title>hashbrown::raw::RawTable$LT$T$C$A$GT$::find::_$u7b$$u7b$closure$u7d$$u7d$::hd596a0b9f8fa5691 (mod.rs:818) (1 samples, 0.96%)</title><rect x="88.4615%" y="516" width="0.9615%" height="15" fill="rgb(224,114,35)" fg:x="92" fg:w="1"/><text x="88.7115%" y="526.50"></text></g><g><title>hashbrown::map::equivalent_key::_$u7b$$u7b$closure$u7d$$u7d$::h497df524ff7f84fb (map.rs:229) (1 samples, 0.96%)</title><rect x="88.4615%" y="532" width="0.9615%" height="15" fill="rgb(245,159,27)" fg:x="92" fg:w="1"/><text x="88.7115%" y="542.50"></text></g><g><title>_$LT$pyo3..gil..GILPool$u20$as$u20$core..ops..drop..Drop$GT$::drop::_$u7b$$u7b$closure$u7d$$u7d$::h0bdb2eff4fd863cf (gil.rs:402) (1 samples, 0.96%)</title><rect x="89.4231%" y="212" width="0.9615%" height="15" fill="rgb(245,172,44)" fg:x="93" fg:w="1"/><text x="89.6731%" y="222.50"></text></g><g><title>alloc::vec::Vec$LT$T$C$A$GT$::split_off::h7c11fb0c09887637 (mod.rs:2121) (1 samples, 0.96%)</title><rect x="89.4231%" y="228" width="0.9615%" height="15" fill="rgb(236,23,11)" fg:x="93" fg:w="1"/><text x="89.6731%" y="238.50"></text></g><g><title>alloc::vec::Vec$LT$T$C$A$GT$::with_capacity_in::hf9e4a95930e38447 (mod.rs:676) (1 samples, 0.96%)</title><rect x="89.4231%" y="244" width="0.9615%" height="15" fill="rgb(205,117,38)" fg:x="93" fg:w="1"/><text x="89.6731%" y="254.50"></text></g><g><title>alloc::raw_vec::RawVec$LT$T$C$A$GT$::with_capacity_in::hf5ecb4b3af938e8c (raw_vec.rs:131) (1 samples, 0.96%)</title><rect x="89.4231%" y="260" width="0.9615%" height="15" fill="rgb(237,72,25)" fg:x="93" fg:w="1"/><text x="89.6731%" y="270.50"></text></g><g><title>alloc::raw_vec::RawVec$LT$T$C$A$GT$::allocate_in::h5b42610b201df4c6 (raw_vec.rs:185) (1 samples, 0.96%)</title><rect x="89.4231%" y="276" width="0.9615%" height="15" fill="rgb(244,70,9)" fg:x="93" fg:w="1"/><text x="89.6731%" y="286.50"></text></g><g><title>_$LT$alloc..alloc..Global$u20$as$u20$core..alloc..Allocator$GT$::allocate::h4502e06f33a96ff7 (alloc.rs:238) (1 samples, 0.96%)</title><rect x="89.4231%" y="292" width="0.9615%" height="15" fill="rgb(217,125,39)" fg:x="93" fg:w="1"/><text x="89.6731%" y="302.50"></text></g><g><title>alloc::alloc::Global::alloc_impl::h4c3bc5aa4dc9731d (alloc.rs:178) (1 samples, 0.96%)</title><rect x="89.4231%" y="308" width="0.9615%" height="15" fill="rgb(235,36,10)" fg:x="93" fg:w="1"/><text x="89.6731%" y="318.50"></text></g><g><title>_$LT$core..result..Result$LT$T$C$E$GT$$u20$as$u20$core..ops..try_trait..Try$GT$::branch::he190a81c9968aa09 (result.rs:2049) (1 samples, 0.96%)</title><rect x="89.4231%" y="324" width="0.9615%" height="15" fill="rgb(251,123,47)" fg:x="93" fg:w="1"/><text x="89.6731%" y="334.50"></text></g><g><title>&lt;module&gt; (parallel.py:96) (49 samples, 47.12%)</title><rect x="44.2308%" y="84" width="47.1154%" height="15" fill="rgb(221,13,13)" fg:x="46" fg:w="49"/><text x="44.4808%" y="94.50">&lt;module&gt; (parallel.py:96)</text></g><g><title>ukf_pyrs::parallel::_::_$LT$impl$u20$pyo3..impl_..pyclass..PyMethods$LT$ukf_pyrs..parallel..UKFParallel$GT$$u20$for$u20$pyo3..impl_..pyclass..PyClassImplCollector$LT$ukf_pyrs..parallel..UKFParallel$GT$$GT$::py_methods::ITEMS::trampoline::he4a4bf84f67f298c (parallel.rs:69) (49 samples, 47.12%)</title><rect x="44.2308%" y="100" width="47.1154%" height="15" fill="rgb(238,131,9)" fg:x="46" fg:w="49"/><text x="44.4808%" y="110.50">ukf_pyrs::parallel::_::_$LT$impl$u20$pyo3..impl_..pyclass..PyMethods$LT$ukf_p..</text></g><g><title>pyo3::impl_::trampoline::fastcall_with_keywords::h65f1f230947ccfbc (trampoline.rs:42) (49 samples, 47.12%)</title><rect x="44.2308%" y="116" width="47.1154%" height="15" fill="rgb(211,50,8)" fg:x="46" fg:w="49"/><text x="44.4808%" y="126.50">pyo3::impl_::trampoline::fastcall_with_keywords::h65f1f230947ccfbc (trampolin..</text></g><g><title>pyo3::impl_::trampoline::trampoline_inner::he33ce43d78f9573e (trampoline.rs:185) (2 samples, 1.92%)</title><rect x="89.4231%" y="132" width="1.9231%" height="15" fill="rgb(245,182,24)" fg:x="93" fg:w="2"/><text x="89.6731%" y="142.50">p..</text></g><g><title>core::ptr::drop_in_place$LT$pyo3..gil..GILPool$GT$::h28c7c78f27507930 (mod.rs:490) (2 samples, 1.92%)</title><rect x="89.4231%" y="148" width="1.9231%" height="15" fill="rgb(242,14,37)" fg:x="93" fg:w="2"/><text x="89.6731%" y="158.50">c..</text></g><g><title>_$LT$pyo3..gil..GILPool$u20$as$u20$core..ops..drop..Drop$GT$::drop::h4ac3d735cb7cd372 (gil.rs:407) (2 samples, 1.92%)</title><rect x="89.4231%" y="164" width="1.9231%" height="15" fill="rgb(246,228,12)" fg:x="93" fg:w="2"/><text x="89.6731%" y="174.50">_..</text></g><g><title>std::thread::local::LocalKey$LT$T$GT$::with::hbaf2b226bfa8c731 (local.rs:422) (2 samples, 1.92%)</title><rect x="89.4231%" y="180" width="1.9231%" height="15" fill="rgb(213,55,15)" fg:x="93" fg:w="2"/><text x="89.6731%" y="190.50">s..</text></g><g><title>std::thread::local::LocalKey$LT$T$GT$::try_with::hfa0213fe01c66920 (local.rs:446) (2 samples, 1.92%)</title><rect x="89.4231%" y="196" width="1.9231%" height="15" fill="rgb(209,9,3)" fg:x="93" fg:w="2"/><text x="89.6731%" y="206.50">s..</text></g><g><title>_$LT$pyo3..gil..GILPool$u20$as$u20$core..ops..drop..Drop$GT$::drop::_$u7b$$u7b$closure$u7d$$u7d$::h0bdb2eff4fd863cf (gil.rs:406) (1 samples, 0.96%)</title><rect x="90.3846%" y="212" width="0.9615%" height="15" fill="rgb(230,59,30)" fg:x="94" fg:w="1"/><text x="90.6346%" y="222.50"></text></g><g><title>core::ptr::drop_in_place$LT$core..cell..RefMut$LT$alloc..vec..Vec$LT$core..ptr..non_null..NonNull$LT$pyo3_ffi..object..PyObject$GT$$GT$$GT$$GT$::hd177f6e948fad1e7 (mod.rs:490) (1 samples, 0.96%)</title><rect x="90.3846%" y="228" width="0.9615%" height="15" fill="rgb(209,121,21)" fg:x="94" fg:w="1"/><text x="90.6346%" y="238.50"></text></g><g><title>core::ptr::drop_in_place$LT$core..cell..BorrowRefMut$GT$::h5361bd6b78389a49 (mod.rs:490) (1 samples, 0.96%)</title><rect x="90.3846%" y="244" width="0.9615%" height="15" fill="rgb(220,109,13)" fg:x="94" fg:w="1"/><text x="90.6346%" y="254.50"></text></g><g><title>_$LT$core..cell..BorrowRefMut$u20$as$u20$core..ops..drop..Drop$GT$::drop::h0b5ce17fd49b770d (cell.rs:1679) (1 samples, 0.96%)</title><rect x="90.3846%" y="260" width="0.9615%" height="15" fill="rgb(232,18,1)" fg:x="94" fg:w="1"/><text x="90.6346%" y="270.50"></text></g><g><title>pyo3::impl_::trampoline::trampoline_inner::hd58cfa227ec75695 (trampoline.rs:177) (1 samples, 0.96%)</title><rect x="91.3462%" y="116" width="0.9615%" height="15" fill="rgb(215,41,42)" fg:x="95" fg:w="1"/><text x="91.5962%" y="126.50"></text></g><g><title>pyo3::gil::GILPool::new::hc9e14b3853db1982 (gil.rs:381) (1 samples, 0.96%)</title><rect x="91.3462%" y="132" width="0.9615%" height="15" fill="rgb(224,123,36)" fg:x="95" fg:w="1"/><text x="91.5962%" y="142.50"></text></g><g><title>core::result::Result$LT$T$C$E$GT$::ok::h900158b8cfc32551 (result.rs:636) (1 samples, 0.96%)</title><rect x="91.3462%" y="148" width="0.9615%" height="15" fill="rgb(240,125,3)" fg:x="95" fg:w="1"/><text x="91.5962%" y="158.50"></text></g><g><title>_$LT$T$u20$as$u20$pyo3..callback..IntoPyCallbackOutput$LT$$BP$mut$u20$pyo3_ffi..object..PyObject$GT$$GT$::convert::h89b37d683f927140 (callback.rs:55) (1 samples, 0.96%)</title><rect x="92.3077%" y="292" width="0.9615%" height="15" fill="rgb(205,98,50)" fg:x="96" fg:w="1"/><text x="92.5577%" y="302.50"></text></g><g><title>pyo3::callback::convert::h9ec7a34d6522ce9f (callback.rs) (2 samples, 1.92%)</title><rect x="92.3077%" y="260" width="1.9231%" height="15" fill="rgb(205,185,37)" fg:x="96" fg:w="2"/><text x="92.5577%" y="270.50">p..</text></g><g><title>_$LT$core..result..Result$LT$T$C$E$GT$$u20$as$u20$pyo3..callback..IntoPyCallbackOutput$LT$U$GT$$GT$::convert::hbb797540570d00c6 (callback.rs:44) (2 samples, 1.92%)</title><rect x="92.3077%" y="276" width="1.9231%" height="15" fill="rgb(238,207,15)" fg:x="96" fg:w="2"/><text x="92.5577%" y="286.50">_..</text></g><g><title>_$LT$T$u20$as$u20$pyo3..callback..IntoPyCallbackOutput$LT$$BP$mut$u20$pyo3_ffi..object..PyObject$GT$$GT$::convert::h89b37d683f927140 (callback.rs:56) (1 samples, 0.96%)</title><rect x="93.2692%" y="292" width="0.9615%" height="15" fill="rgb(213,199,42)" fg:x="97" fg:w="1"/><text x="93.5192%" y="302.50"></text></g><g><title>pyo3::conversions::std::vec::_$LT$impl$u20$pyo3..conversion..IntoPy$LT$pyo3..instance..Py$LT$pyo3..types..any..PyAny$GT$$GT$$u20$for$u20$alloc..vec..Vec$LT$T$GT$$GT$::into_py::h751d831e35c23676 (vec.rs:32) (1 samples, 0.96%)</title><rect x="93.2692%" y="308" width="0.9615%" height="15" fill="rgb(235,201,11)" fg:x="97" fg:w="1"/><text x="93.5192%" y="318.50"></text></g><g><title>pyo3::types::list::new_from_iter::h1c9dbe135cb34ff8 (list.rs:27) (1 samples, 0.96%)</title><rect x="93.2692%" y="324" width="0.9615%" height="15" fill="rgb(207,46,11)" fg:x="97" fg:w="1"/><text x="93.5192%" y="334.50"></text></g><g><title>_$LT$T$u20$as$u20$core..convert..TryInto$LT$U$GT$$GT$::try_into::h68829ed729c83678 (mod.rs:768) (1 samples, 0.96%)</title><rect x="93.2692%" y="340" width="0.9615%" height="15" fill="rgb(241,35,35)" fg:x="97" fg:w="1"/><text x="93.5192%" y="350.50"></text></g><g><title>core::convert::num::_$LT$impl$u20$core..convert..TryFrom$LT$usize$GT$$u20$for$u20$isize$GT$::try_from::h9ef1c0059820ef31 (num.rs:251) (1 samples, 0.96%)</title><rect x="93.2692%" y="356" width="0.9615%" height="15" fill="rgb(243,32,47)" fg:x="97" fg:w="1"/><text x="93.5192%" y="366.50"></text></g><g><title>numpy::array::PyArray$LT$T$C$D$GT$::new_with_data::ha07db6c7f88fd507 (array.rs:374) (1 samples, 0.96%)</title><rect x="94.2308%" y="372" width="0.9615%" height="15" fill="rgb(247,202,23)" fg:x="98" fg:w="1"/><text x="94.4808%" y="382.50"></text></g><g><title>numpy::npyffi::array::PyArrayAPI::PyArray_NewFromDescr::h375b5a8d99e32836 (mod.rs:38) (1 samples, 0.96%)</title><rect x="94.2308%" y="388" width="0.9615%" height="15" fill="rgb(219,102,11)" fg:x="98" fg:w="1"/><text x="94.4808%" y="398.50"></text></g><g><title>numpy::npyffi::array::PyArrayAPI::get::h7850d379c11ae7d7 (array.rs:49) (1 samples, 0.96%)</title><rect x="94.2308%" y="404" width="0.9615%" height="15" fill="rgb(243,110,44)" fg:x="98" fg:w="1"/><text x="94.4808%" y="414.50"></text></g><g><title>pyo3::sync::GILOnceCell$LT$T$GT$::get_or_try_init::h1dad80fa39a1c555 (sync.rs:128) (1 samples, 0.96%)</title><rect x="94.2308%" y="420" width="0.9615%" height="15" fill="rgb(222,74,54)" fg:x="98" fg:w="1"/><text x="94.4808%" y="430.50"></text></g><g><title>pyo3::sync::GILOnceCell$LT$T$GT$::get::h5bb52125f10c5850 (sync.rs:98) (1 samples, 0.96%)</title><rect x="94.2308%" y="436" width="0.9615%" height="15" fill="rgb(216,99,12)" fg:x="98" fg:w="1"/><text x="94.4808%" y="446.50"></text></g><g><title>core::option::Option$LT$T$GT$::as_ref::h055bf780a76f2cc0 (option.rs:677) (1 samples, 0.96%)</title><rect x="94.2308%" y="452" width="0.9615%" height="15" fill="rgb(226,22,26)" fg:x="98" fg:w="1"/><text x="94.4808%" y="462.50"></text></g><g><title>_$LT$ndarray..ArrayBase$LT$ndarray..data_repr..OwnedRepr$LT$A$GT$$C$D$GT$$u20$as$u20$numpy..convert..IntoPyArray$GT$::into_pyarray::hcab05eb4af4bfd9e (convert.rs:94) (2 samples, 1.92%)</title><rect x="94.2308%" y="324" width="1.9231%" height="15" fill="rgb(217,163,10)" fg:x="98" fg:w="2"/><text x="94.4808%" y="334.50">_..</text></g><g><title>numpy::array::PyArray$LT$T$C$D$GT$::from_owned_array::h5628854e9608460b (array.rs:559) (2 samples, 1.92%)</title><rect x="94.2308%" y="340" width="1.9231%" height="15" fill="rgb(213,25,53)" fg:x="98" fg:w="2"/><text x="94.4808%" y="350.50">n..</text></g><g><title>numpy::array::PyArray$LT$T$C$D$GT$::from_raw_parts::h6e02a4c8b1b77e33 (array.rs:406) (2 samples, 1.92%)</title><rect x="94.2308%" y="356" width="1.9231%" height="15" fill="rgb(252,105,26)" fg:x="98" fg:w="2"/><text x="94.4808%" y="366.50">n..</text></g><g><title>numpy::array::PyArray$LT$T$C$D$GT$::new_with_data::ha07db6c7f88fd507 (array.rs:377) (1 samples, 0.96%)</title><rect x="95.1923%" y="372" width="0.9615%" height="15" fill="rgb(220,39,43)" fg:x="99" fg:w="1"/><text x="95.4423%" y="382.50"></text></g><g><title>_$LT$f32$u20$as$u20$numpy..dtype..Element$GT$::get_dtype::h12cca19e99ebb245 (dtype.rs:458) (1 samples, 0.96%)</title><rect x="95.1923%" y="388" width="0.9615%" height="15" fill="rgb(229,68,48)" fg:x="99" fg:w="1"/><text x="95.4423%" y="398.50"></text></g><g><title>numpy::dtype::PyArrayDescr::from_npy_type::hd766fd8f9f2480b1 (dtype.rs:134) (1 samples, 0.96%)</title><rect x="95.1923%" y="404" width="0.9615%" height="15" fill="rgb(252,8,32)" fg:x="99" fg:w="1"/><text x="95.4423%" y="414.50"></text></g><g><title>pyo3::marker::Python::from_owned_ptr::hcbe72eeb032a130b (marker.rs:764) (1 samples, 0.96%)</title><rect x="95.1923%" y="420" width="0.9615%" height="15" fill="rgb(223,20,43)" fg:x="99" fg:w="1"/><text x="95.4423%" y="430.50"></text></g><g><title>pyo3::conversion::FromPyPointer::from_owned_ptr::hd3e86ba46de47e2c (conversion.rs:556) (1 samples, 0.96%)</title><rect x="95.1923%" y="436" width="0.9615%" height="15" fill="rgb(229,81,49)" fg:x="99" fg:w="1"/><text x="95.4423%" y="446.50"></text></g><g><title>pyo3::conversion::FromPyPointer::from_owned_ptr_or_panic::hdae2ccb96d6eba8c (conversion.rs:547) (1 samples, 0.96%)</title><rect x="95.1923%" y="452" width="0.9615%" height="15" fill="rgb(236,28,36)" fg:x="99" fg:w="1"/><text x="95.4423%" y="462.50"></text></g><g><title>_$LT$T$u20$as$u20$pyo3..conversion..FromPyPointer$GT$::from_owned_ptr_or_opt::ha6be4144569073cc (conversion.rs:606) (1 samples, 0.96%)</title><rect x="95.1923%" y="468" width="0.9615%" height="15" fill="rgb(249,185,26)" fg:x="99" fg:w="1"/><text x="95.4423%" y="478.50"></text></g><g><title>pyo3::gil::register_owned::h5514b8af1a55ea5a (gil.rs:457) (1 samples, 0.96%)</title><rect x="95.1923%" y="484" width="0.9615%" height="15" fill="rgb(249,174,33)" fg:x="99" fg:w="1"/><text x="95.4423%" y="494.50"></text></g><g><title>std::thread::local::LocalKey$LT$T$GT$::try_with::hc803a01c59b67cbf (local.rs:446) (1 samples, 0.96%)</title><rect x="95.1923%" y="500" width="0.9615%" height="15" fill="rgb(233,201,37)" fg:x="99" fg:w="1"/><text x="95.4423%" y="510.50"></text></g><g><title>pyo3::gil::register_owned::_$u7b$$u7b$closure$u7d$$u7d$::hb80716fe2493225e (gil.rs:456) (1 samples, 0.96%)</title><rect x="95.1923%" y="516" width="0.9615%" height="15" fill="rgb(221,78,26)" fg:x="99" fg:w="1"/><text x="95.4423%" y="526.50"></text></g><g><title>alloc::vec::Vec$LT$T$C$A$GT$::push::hc837a7ef143efc25 (mod.rs:1839) (1 samples, 0.96%)</title><rect x="95.1923%" y="532" width="0.9615%" height="15" fill="rgb(250,127,30)" fg:x="99" fg:w="1"/><text x="95.4423%" y="542.50"></text></g><g><title>&lt;module&gt; (parallel.py:97) (6 samples, 5.77%)</title><rect x="91.3462%" y="84" width="5.7692%" height="15" fill="rgb(230,49,44)" fg:x="95" fg:w="6"/><text x="91.5962%" y="94.50">&lt;module..</text></g><g><title>pyo3::pyclass::create_type_object::GetSetDefType::create_py_get_set_def::getset_getter::h82a7e0af58ace92f (create_type_object.rs:539) (6 samples, 5.77%)</title><rect x="91.3462%" y="100" width="5.7692%" height="15" fill="rgb(229,67,23)" fg:x="95" fg:w="6"/><text x="91.5962%" y="110.50">pyo3::p..</text></g><g><title>pyo3::impl_::trampoline::trampoline_inner::hd58cfa227ec75695 (trampoline.rs:181) (5 samples, 4.81%)</title><rect x="92.3077%" y="116" width="4.8077%" height="15" fill="rgb(249,83,47)" fg:x="96" fg:w="5"/><text x="92.5577%" y="126.50">pyo3::..</text></g><g><title>std::panic::catch_unwind::ha546cb59d16ac178 (panic.rs:140) (5 samples, 4.81%)</title><rect x="92.3077%" y="132" width="4.8077%" height="15" fill="rgb(215,43,3)" fg:x="96" fg:w="5"/><text x="92.5577%" y="142.50">std::p..</text></g><g><title>std::panicking::try::h91b5a89450c575d8 (panicking.rs:451) (5 samples, 4.81%)</title><rect x="92.3077%" y="148" width="4.8077%" height="15" fill="rgb(238,154,13)" fg:x="96" fg:w="5"/><text x="92.5577%" y="158.50">std::p..</text></g><g><title>__rust_try (ukf_pyrs/ukf_pyrs.cpython-311-x86_64-linux-gnu.so) (5 samples, 4.81%)</title><rect x="92.3077%" y="164" width="4.8077%" height="15" fill="rgb(219,56,2)" fg:x="96" fg:w="5"/><text x="92.5577%" y="174.50">__rust..</text></g><g><title>std::panicking::try::do_call::hf8473e4f550e7101 (panicking.rs:487) (5 samples, 4.81%)</title><rect x="92.3077%" y="180" width="4.8077%" height="15" fill="rgb(233,0,4)" fg:x="96" fg:w="5"/><text x="92.5577%" y="190.50">std::p..</text></g><g><title>core::mem::manually_drop::ManuallyDrop$LT$T$GT$::new::h744eed9cd7c32602 (manually_drop.rs:71) (5 samples, 4.81%)</title><rect x="92.3077%" y="196" width="4.8077%" height="15" fill="rgb(235,30,7)" fg:x="96" fg:w="5"/><text x="92.5577%" y="206.50">core::..</text></g><g><title>pyo3::impl_::trampoline::trampoline_inner::_$u7b$$u7b$closure$u7d$$u7d$::h9c30acd92d4c99c2 (trampoline.rs:181) (5 samples, 4.81%)</title><rect x="92.3077%" y="212" width="4.8077%" height="15" fill="rgb(250,79,13)" fg:x="96" fg:w="5"/><text x="92.5577%" y="222.50">pyo3::..</text></g><g><title>pyo3::pyclass::create_type_object::GetSetDefType::create_py_get_set_def::getset_getter::_$u7b$$u7b$closure$u7d$$u7d$::hd6af42a048c57489 (create_type_object.rs:538) (5 samples, 4.81%)</title><rect x="92.3077%" y="228" width="4.8077%" height="15" fill="rgb(211,146,34)" fg:x="96" fg:w="5"/><text x="92.5577%" y="238.50">pyo3::..</text></g><g><title>ukf_pyrs::parallel::_::_$LT$impl$u20$ukf_pyrs..parallel..UKFParallel$GT$::__pymethod_get_py_get_x__::h1d75b706b9787760 (parallel.rs:69) (5 samples, 4.81%)</title><rect x="92.3077%" y="244" width="4.8077%" height="15" fill="rgb(228,22,38)" fg:x="96" fg:w="5"/><text x="92.5577%" y="254.50">ukf_py..</text></g><g><title>ukf_pyrs::parallel::UKFParallel::py_get_x::h92e50c3f2c89ca32 (parallel.rs:122) (3 samples, 2.88%)</title><rect x="94.2308%" y="260" width="2.8846%" height="15" fill="rgb(235,168,5)" fg:x="98" fg:w="3"/><text x="94.4808%" y="270.50">uk..</text></g><g><title>ukf_pyrs::parallel::UKFParallel::py_get_each::hf2ded146df6ba542 (parallel.rs:63) (3 samples, 2.88%)</title><rect x="94.2308%" y="276" width="2.8846%" height="15" fill="rgb(221,155,16)" fg:x="98" fg:w="3"/><text x="94.4808%" y="286.50">uk..</text></g><g><title>ukf_pyrs::parallel::UKFParallel::py_get_x::_$u7b$$u7b$closure$u7d$$u7d$::h6f745aa594cc99fb (parallel.rs:122) (3 samples, 2.88%)</title><rect x="94.2308%" y="292" width="2.8846%" height="15" fill="rgb(215,215,53)" fg:x="98" fg:w="3"/><text x="94.4808%" y="302.50">uk..</text></g><g><title>ukf_pyrs::unscented_kalman_filter::UnscentedKalmanFilter::py_get_x::he2806c3decbc3933 (unscented_kalman_filter.rs:280) (3 samples, 2.88%)</title><rect x="94.2308%" y="308" width="2.8846%" height="15" fill="rgb(223,4,10)" fg:x="98" fg:w="3"/><text x="94.4808%" y="318.50">uk..</text></g><g><title>ndarray::impl_clone::_$LT$impl$u20$core..clone..Clone$u20$for$u20$ndarray..ArrayBase$LT$S$C$D$GT$$GT$::clone::h3530ebdfcaf1faf7 (impl_clone.rs:20) (1 samples, 0.96%)</title><rect x="96.1538%" y="324" width="0.9615%" height="15" fill="rgb(234,103,6)" fg:x="100" fg:w="1"/><text x="96.4038%" y="334.50"></text></g><g><title>_$LT$ndarray..dimension..dim..Dim$LT$I$GT$$u20$as$u20$core..clone..Clone$GT$::clone::h0d9cdfd4ec40873c (dim.rs:40) (1 samples, 0.96%)</title><rect x="96.1538%" y="340" width="0.9615%" height="15" fill="rgb(227,97,0)" fg:x="100" fg:w="1"/><text x="96.4038%" y="350.50"></text></g><g><title>core::array::_$LT$impl$u20$core..clone..Clone$u20$for$u20$$u5b$T$u3b$$u20$N$u5d$$GT$::clone::h785106968f3aa170 (mod.rs:404) (1 samples, 0.96%)</title><rect x="96.1538%" y="356" width="0.9615%" height="15" fill="rgb(234,150,53)" fg:x="100" fg:w="1"/><text x="96.4038%" y="366.50"></text></g><g><title>_$LT$T$u20$as$u20$core..array..SpecArrayClone$GT$::clone::h1d152886a445b8b6 (mod.rs:427) (1 samples, 0.96%)</title><rect x="96.1538%" y="372" width="0.9615%" height="15" fill="rgb(228,201,54)" fg:x="100" fg:w="1"/><text x="96.4038%" y="382.50"></text></g><g><title>array_dealloc (numpy/core/_multiarray_umath.cpython-311-x86_64-linux-gnu.so) (1 samples, 0.96%)</title><rect x="97.1154%" y="84" width="0.9615%" height="15" fill="rgb(222,22,37)" fg:x="101" fg:w="1"/><text x="97.3654%" y="94.50"></text></g><g><title>pyo3::impl_::pyclass::tp_dealloc::h9bf1e181dca06508 (pyclass.rs:998) (1 samples, 0.96%)</title><rect x="97.1154%" y="100" width="0.9615%" height="15" fill="rgb(237,53,32)" fg:x="101" fg:w="1"/><text x="97.3654%" y="110.50"></text></g><g><title>pyo3::impl_::trampoline::dealloc::hf1a21d398fbd9792 (trampoline.rs:153) (1 samples, 0.96%)</title><rect x="97.1154%" y="116" width="0.9615%" height="15" fill="rgb(233,25,53)" fg:x="101" fg:w="1"/><text x="97.3654%" y="126.50"></text></g><g><title>pyo3::impl_::trampoline::trampoline_inner_unraisable::hc2c84b60c9f2b4ed (trampoline.rs:230) (1 samples, 0.96%)</title><rect x="97.1154%" y="132" width="0.9615%" height="15" fill="rgb(210,40,34)" fg:x="101" fg:w="1"/><text x="97.3654%" y="142.50"></text></g><g><title>core::ptr::drop_in_place$LT$pyo3..gil..GILPool$GT$::h28c7c78f27507930 (mod.rs:490) (1 samples, 0.96%)</title><rect x="97.1154%" y="148" width="0.9615%" height="15" fill="rgb(241,220,44)" fg:x="101" fg:w="1"/><text x="97.3654%" y="158.50"></text></g><g><title>_$LT$pyo3..gil..GILPool$u20$as$u20$core..ops..drop..Drop$GT$::drop::h4ac3d735cb7cd372 (gil.rs:407) (1 samples, 0.96%)</title><rect x="97.1154%" y="164" width="0.9615%" height="15" fill="rgb(235,28,35)" fg:x="101" fg:w="1"/><text x="97.3654%" y="174.50"></text></g><g><title>_$LT$alloc..vec..Vec$LT$T$C$A$GT$$u20$as$u20$core..iter..traits..collect..IntoIterator$GT$::into_iter::hd97a1b062cfe5501 (mod.rs:2754) (1 samples, 0.96%)</title><rect x="97.1154%" y="180" width="0.9615%" height="15" fill="rgb(210,56,17)" fg:x="101" fg:w="1"/><text x="97.3654%" y="190.50"></text></g><g><title>alloc::vec::Vec$LT$T$C$A$GT$::as_mut_ptr::ha7fc2d70477c92cc (mod.rs:1282) (1 samples, 0.96%)</title><rect x="97.1154%" y="196" width="0.9615%" height="15" fill="rgb(224,130,29)" fg:x="101" fg:w="1"/><text x="97.3654%" y="206.50"></text></g><g><title>core::ptr::mut_ptr::_$LT$impl$u20$$BP$mut$u20$T$GT$::is_null::h3a806b6c11a12957 (mut_ptr.rs:50) (1 samples, 0.96%)</title><rect x="97.1154%" y="212" width="0.9615%" height="15" fill="rgb(235,212,8)" fg:x="101" fg:w="1"/><text x="97.3654%" y="222.50"></text></g><g><title>all (104 samples, 100%)</title><rect x="0.0000%" y="52" width="100.0000%" height="15" fill="rgb(223,33,50)" fg:x="0" fg:w="104"/><text x="0.2500%" y="62.50"></text></g><g><title>0x7fb153227cd0 (libc.so.6) (104 samples, 100.00%)</title><rect x="0.0000%" y="68" width="100.0000%" height="15" fill="rgb(219,149,13)" fg:x="0" fg:w="104"/><text x="0.2500%" y="78.50">0x7fb153227cd0 (libc.so.6)</text></g><g><title>free (libc.so.6) (2 samples, 1.92%)</title><rect x="98.0769%" y="84" width="1.9231%" height="15" fill="rgb(250,156,29)" fg:x="102" fg:w="2"/><text x="98.3269%" y="94.50">f..</text></g><g><title>0x7fb15329a420 (libc.so.6) (1 samples, 0.96%)</title><rect x="99.0385%" y="100" width="0.9615%" height="15" fill="rgb(216,193,19)" fg:x="103" fg:w="1"/><text x="99.2885%" y="110.50"></text></g></svg></svg>

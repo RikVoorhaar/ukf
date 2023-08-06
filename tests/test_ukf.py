@@ -20,8 +20,8 @@ def compare_kalman_filters(
     errors = {
         "x": relative_error(kf_py.x, kf_rs.x),
         "z": relative_error(kf_py.z, kf_rs.z),
-        "sigmas_f": relative_error(kf_py.sigmas_f, kf_rs.sigmas_f.T),
-        "sigmas_h": relative_error(kf_py.sigmas_h, kf_rs.sigmas_h.T),
+        "sigmas_f": relative_error(kf_py.sigmas_f, kf_rs.sigmas_f),
+        "sigmas_h": relative_error(kf_py.sigmas_h, kf_rs.sigmas_h),
         "Q": relative_error(kf_py.Q, kf_rs.Q),
         "R": relative_error(kf_py.R, kf_rs.R),
         "K": relative_error(kf_py.K, kf_rs.K),
@@ -78,7 +78,11 @@ def test_constant_speed_model(dim_z, alpha, beta, kappa):
     sigma_points_py = MerweScaledSigmaPoints(dim_x, alpha, beta, kappa)
     sigma_points_rs = SigmaPoints.merwe(dim_x, alpha, beta, kappa)
     kalman_filter_rs = UKF(
-        dim_x, dim_z, measurement_function(hx), transition_function(fx), sigma_points_rs
+        dim_x,
+        dim_z,
+        measurement_function(dim_z)(hx),
+        transition_function(fx),
+        sigma_points_rs,
     )
     kalman_filter_py = UKF_Py(dim_x, dim_z, 1.0, hx, fx, sigma_points_py)
     ukf_comb = CombinedFilter(kalman_filter_rs, kalman_filter_py)
@@ -117,7 +121,11 @@ def test_random_matrix_model(dim_z, dim_x, alpha, beta, kappa):
         return (F_mat @ x).astype(np.float32)
 
     kalman_filter_rs = UKF(
-        dim_x, dim_z, measurement_function(hx), transition_function(fx), sigma_points
+        dim_x,
+        dim_z,
+        measurement_function(dim_z)(hx), # rust version doesn't work with filterpy 
+        transition_function(fx),
+        sigma_points,
     )
     sigma_points_py = MerweScaledSigmaPoints(dim_x, alpha, beta, kappa)
     kalman_filter_py = UKF_Py(dim_x, dim_z, 1.0, hx, fx, sigma_points_py)

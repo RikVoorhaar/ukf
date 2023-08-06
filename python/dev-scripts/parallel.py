@@ -14,8 +14,16 @@ from ukf_pyrs import (
     UKFParallel,
 )
 from ukf_pyrs.pinhole_camera import CameraProjector, PinholeCamera
+import argparse
 
-N_points = 5000
+parser = argparse.ArgumentParser()
+parser.add_argument("--job-type", type=str, default="parallel")
+
+JOB_TYPE = parser.parse_args().job_type
+# JOB_TYPE = "parallel"
+# JOB_TYPE = "single"
+
+N_points = 10000
 point_a = np.array([-50, 0, 0])
 point_b = np.array([0, 120, 130])
 point_c = np.array([10, -10, 10]) * 2
@@ -74,25 +82,32 @@ for _ in range(n_filters):
     kalman_filter.P = np.diag([1e0] * 3 + [1e0] * 3).astype(np.float32)
     kalman_filters.append(kalman_filter)
 
-parallel_ukf = UKFParallel(kalman_filters)
-
 
 time_begin = perf_counter()
-predictions_list = []
-for p1, p2 in zip(
-    proj_points_obs1.astype(np.float32), proj_points_obs2.astype(np.float32)
-):
-    parallel_ukf.update_measurement_context([0]*n_filters)
-    parallel_ukf.predict(dt)
+if JOB_TYPE == "parallel":
+    parallel_ukf = UKFParallel(kalman_filters)
+    predictions_list = []
+    for p1, p2 in zip(
+        proj_points_obs1.astype(np.float32), proj_points_obs2.astype(np.float32)
+    ):
+        parallel_ukf.update_measurement_context([0] * n_filters)
+        parallel_ukf.predict(dt)
 
-    parallel_ukf.update([p1 + i for i in range(n_filters)])
-    predictions_list.append(parallel_ukf.x)
+        parallel_ukf.update([p1 + i for i in range(n_filters)])
+        predictions_list.append(parallel_ukf.x)
+elif JOB_TYPE == "single":
+    ukf = kalman_filters[0]
+    predictions_list = []
+    for _ in range(n_filters):
+        for p1, p2 in zip(
+            proj_points_obs1.astype(np.float32), proj_points_obs2.astype(np.float32)
+        ):
+            ukf.update_measurement_context(0)
+            ukf.predict(dt)
 
-    # parallel_ukf.update_measurement_context([1]*n_filters)
-    # hx_rust.select_camera(1)
-    # parallel_ukf.predict(dt)
-    # parallel_ukf.update([p2 + i for i in range(n_filters)])
-    # predictions_list.append(parallel_ukf.x)
+            ukf.update(p1)
+            predictions_list.append(ukf.x)
+
+
 time_end = perf_counter()
-
 print(f"Time elapsed: {time_end - time_begin:0.4f}s")

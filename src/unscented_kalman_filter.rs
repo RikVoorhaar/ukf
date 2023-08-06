@@ -51,8 +51,8 @@ impl UnscentedKalmanFilter {
         let P_post: Array2<Float> = Array2::eye(dim_x);
         let Q: Array2<Float> = Array2::eye(dim_x);
         let R: Array2<Float> = Array2::eye(dim_z);
-        let sigmas_f: Array2<Float> = Array2::zeros((dim_x, 2 * dim_x + 1));
-        let sigmas_h: Array2<Float> = Array2::zeros((dim_z, 2 * dim_x + 1));
+        let sigmas_f: Array2<Float> = Array2::zeros((2 * dim_x + 1, dim_x));
+        let sigmas_h: Array2<Float> = Array2::zeros((2 * dim_x + 1, dim_z));
         let K: Array2<Float> = Array2::zeros((dim_x, dim_z));
         let y: Array1<Float> = Array1::zeros(dim_z);
         let z: Array1<Float> = Array1::zeros(dim_z);
@@ -87,9 +87,9 @@ impl UnscentedKalmanFilter {
         noise_cov: Option<&Array2<Float>>,
     ) -> (Array1<Float>, Array2<Float>) {
         debug!("ut");
-        let x: Array1<Float> = self.sigma_points.get_Wm().dot(&sigmas.t());
+        let x: Array1<Float> = self.sigma_points.get_Wm().dot(sigmas);
 
-        let y = sigmas - x.clone().insert_axis(Axis(1));
+        let y = &sigmas.t() - x.clone().insert_axis(Axis(1));
 
         let wc_diag = Array2::from_diag(&self.sigma_points.get_Wc().to_owned());
 
@@ -106,14 +106,16 @@ impl UnscentedKalmanFilter {
     fn compute_process_sigmas(&mut self, dt: Float) -> Result<(), Error> {
         let sigmas = self.sigma_points.call(self.x.view(), self.P.view())?;
 
-        for (col_sigmas, mut col_sigmas_f) in
-            sigmas.outer_iter().zip(self.sigmas_f.columns_mut())
+        debug!("Shape of sigmas: {:?}", sigmas.shape());
+        debug!("Shape of sigmas_f: {:?}", self.sigmas_f.shape());
+        for (row_sigmas, mut row_sigmas_f) in
+            sigmas.axis_iter(Axis(0)).zip(self.sigmas_f.rows_mut())
         {
             let result =
-                self.fx.f.call_f(col_sigmas, dt).map_err(|e| {
+                self.fx.f.call_f(row_sigmas, dt).map_err(|e| {
                     anyhow!(format!("Error in transition function: {}", e))
                 })?;
-            col_sigmas_f.assign(&result);
+            row_sigmas_f.assign(&result);
         }
 
         Ok(())
@@ -140,33 +142,34 @@ impl UnscentedKalmanFilter {
         debug!("cross variance");
         let Wc = self.sigma_points.get_Wc();
 
-        let mut L = &self.sigmas_f - x.insert_axis(Axis(1)).to_owned();
+        let mut L = &self.sigmas_f.t() - x.insert_axis(Axis(1)).to_owned();
 
-        debug!("Shape of L: {:?}", L.shape());
-        debug!("L before\n{:?}", L);
-        debug!("Shape of Wc: {:?}", Wc.shape());
-        // for k in 0..self.sigma_points.n_points() {
-        //     L.column_mut(k).mapv_inplace(|v| v * Wc[k]);
-        // }
-        debug!("n_points= {:?}", self.sigma_points.n_points());
+        // debug!("Shape of L: {:?}", L.shape());
+        // debug!("L before\n{:?}", L);
+        // debug!("Shape of Wc: {:?}", Wc.shape());
+        // debug!("n_points= {:?}", self.sigma_points.n_points());
+
         for k in 0..self.sigma_points.n_points() {
             let mut col = L.column_mut(k);
             col *= Wc[k];
         }
-        debug!("L after\n{:?}", L);
-        let R = &self.sigmas_h - z.insert_axis(Axis(1)).to_owned();
-        debug!("Shape of R: {:?}", R.shape());
-        debug!("R after\n{:?}", R);
+        // debug!("L after\n{:?}", L);
+        // debug!("Shape of sigmas_h: {:?}", self.sigmas_h.shape());
+        // debug!("Shape of z: {:?}", z.shape());
+        let R = &self.sigmas_h - z.insert_axis(Axis(0)).to_owned();
+        // debug!("Shape of R: {:?}", R.shape());
+        // debug!("R after\n{:?}", R);
 
-        L.dot(&R.t())
+        L.dot(&R)
     }
 
     pub fn update(&mut self, z: ArrayView1<Float>) -> Result<(), Error> {
         debug!("update");
-        for i in 0..self.sigma_points.n_points() {
-            let new_column = self.hx.h.call_h(self.sigmas_f.column(i))?;
-            self.sigmas_h.column_mut(i).assign(&new_column);
-        }
+        // for i in 0..self.sigma_points.n_points() {
+        //     let new_column = self.hx.h.call_h(self.sigmas_f.row(i))?;
+        //     self.sigmas_h.row_mut(i).assign(&new_column);
+        // }
+        self.sigmas_h = self.hx.h.call_h_batch(self.sigmas_f.view())?;
 
         let (z_pred, S) = self.unscented_transform(&self.sigmas_h, Some(&self.R));
         let Pxz = self.cross_variance(self.x.view(), z_pred.view());

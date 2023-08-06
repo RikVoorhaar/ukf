@@ -43,6 +43,11 @@ impl MeasurementFunction for CoordinateProjectionFunction {
     fn update_py_context(&mut self, _: Python<'_>, _: PyObject) -> PyResult<()> {
         Ok(())
     }
+
+    fn get_output_dim(&self) -> usize {
+        self.dim_small
+        
+    }
 }
 
 #[pymethods]

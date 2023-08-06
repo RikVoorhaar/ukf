@@ -130,6 +130,31 @@ impl MeasurementFunction for CameraProjector {
         self.index = index;
         Ok(())
     }
+
+    fn get_output_dim(&self) -> usize {
+        2
+    }
+
+    fn call_h_batch(&self, x: ArrayView2<Float>) -> PyResult<Array2<Float>> {
+        let x = x.slice(s![.., ..3]).to_owned();
+        let mut x = x.dot(&self.fundamental_matrices.slice(s![self.index, .., ..]));
+
+        let translation_vec = self.translation_vectors.slice(s![self.index, ..]);
+
+        // Stack allocating translation vector for faster speed
+        let translation: [Float; 3] =
+            [translation_vec[0], translation_vec[1], translation_vec[2]];
+        for mut row in x.axis_iter_mut(Axis(0)) {
+            row[0] += translation[0];
+            row[1] += translation[1];
+            row[2] += translation[2];
+        }
+
+        x.axis_iter_mut(Axis(0)).for_each(|mut row| {
+            row /= row[2];
+        });
+        Ok(x.slice(s![.., ..2]).to_owned())
+    }
 }
 
 #[pymethods]
