@@ -211,13 +211,14 @@ pub trait TransitionFunction: Send + Sync {
     #[inline(always)]
     fn call_f_batch_mut(
         &self,
-        X: ArrayView2<Float>,
+        X: & Array2<Float>,
         dt: Float,
         out: &mut Array2<Float>,
     ) -> PyResult<()> {
         // let mut result = Array2::zeros((X.nrows(), X.ncols()));
         for (x, mut row) in X.axis_iter(Axis(0)).zip(out.rows_mut()) {
-            row.assign(&self.call_f(x, dt)?);
+            let result = self.call_f(x, dt)?;
+            row.assign(&result);
         }
 
         Ok(())

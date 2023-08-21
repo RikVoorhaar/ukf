@@ -115,7 +115,7 @@ impl UnscentedKalmanFilter {
         // }
         self.fx
             .f
-            .call_f_batch_mut(sigmas.view(), dt, &mut self.sigmas_f).map_err(|e| {
+            .call_f_batch_mut(&sigmas, dt, &mut self.sigmas_f).map_err(|e| {
                 anyhow!(format!("Error in transition function: {}", e))
             })?;
 

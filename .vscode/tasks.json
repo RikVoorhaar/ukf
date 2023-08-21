@@ -4,7 +4,7 @@
         {
             "label": "maturin develop",
             "type": "shell",
-            "command": "source .venv/bin/activate && maturin develop",
+            "command": "source .venv/bin/activate.fish && maturin develop",
             "group": {
                 "kind": "build",
                 "isDefault": true

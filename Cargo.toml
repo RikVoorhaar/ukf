@@ -7,6 +7,10 @@ edition = "2021"
 name = "ukf_pyrs"
 crate_type = ["cdylib"]
 
+[[example]]
+name = "example1"
+path = "src/examples/pinhole_camera_batch.rs"
+
 [dependencies]
 arrayvec = "0.7"
 ndarray = { version = "0.15.6", features = ["approx-0_5"] }

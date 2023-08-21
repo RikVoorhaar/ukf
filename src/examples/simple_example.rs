@@ -46,7 +46,6 @@ impl MeasurementFunction for CoordinateProjectionFunction {
 
     fn get_output_dim(&self) -> usize {
         self.dim_small
-        
     }
 }
 
@@ -94,6 +93,7 @@ pub struct FirstOrderTransitionFunction {
     dim: usize,
 }
 
+
 impl TransitionFunction for FirstOrderTransitionFunction {
     fn call_f(&self, x: ArrayView1<Float>, dt: Float) -> PyResult<Array1<Float>> {
         let mut x = x.to_owned();
@@ -120,7 +120,7 @@ impl TransitionFunction for FirstOrderTransitionFunction {
 #[pymethods]
 impl FirstOrderTransitionFunction {
     #[new]
-    fn new(dim: usize) -> Self {
+    pub fn new(dim: usize) -> Self {
         Self { dim }
     }
 
