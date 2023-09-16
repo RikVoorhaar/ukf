@@ -1,8 +1,7 @@
 #![allow(non_snake_case)]
 
 pub mod dynamic_functions;
-// pub mod examples;
-pub mod examples;
+pub mod functions;
 pub mod linalg_utils;
 pub mod ring_buffer;
 pub mod sigma_points;
@@ -27,10 +26,10 @@ fn ukf_pyrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<UnscentedKalmanFilter>()?;
     m.add_class::<PythonMeasurementFunction>()?;
     m.add_class::<PythonTransitionFunction>()?;
-    m.add_class::<examples::pinhole_camera::PinholeCamera>()?;
-    m.add_class::<examples::pinhole_camera::CameraProjector>()?;
-    m.add_class::<examples::simple_example::CoordinateProjectionFunction>()?;
-    m.add_class::<examples::simple_example::FirstOrderTransitionFunction>()?;
+    m.add_class::<functions::pinhole_camera::PinholeCamera>()?;
+    m.add_class::<functions::pinhole_camera::CameraProjector>()?;
+    m.add_class::<functions::simple_example::CoordinateProjectionFunction>()?;
+    m.add_class::<functions::simple_example::FirstOrderTransitionFunction>()?;
     m.add_class::<parallel::UKFParallel>()?;
 
     Ok(())

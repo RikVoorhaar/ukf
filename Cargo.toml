@@ -5,11 +5,15 @@ edition = "2021"
 
 [lib]
 name = "ukf_pyrs"
-crate_type = ["cdylib"]
+crate_type = ["cdylib", "rlib"]
 
-[[example]]
-name = "example1"
-path = "src/examples/pinhole_camera_batch.rs"
+# [[example]]
+# name = "pinhole_camera_example"
+# path = "examples/pinhole_camera_example"
+
+[features]
+extension-module = ["pyo3/extension-module"]
+default = ["extension-module"]
 
 [dependencies]
 arrayvec = "0.7"
@@ -17,7 +21,7 @@ ndarray = { version = "0.15.6", features = ["approx-0_5"] }
 approx = "0.5.1"
 ndarray-linalg = { version = "0.16.0", features = ["openblas-static"] }
 ndarray-rand = "0.14.0"
-pyo3 = { version = "0.19", features = ["extension-module", "anyhow", ] }
+pyo3 = { version = "0.19", features = ["anyhow", "extension-module"] }
 numpy = "0.19.0"
 pyo3-log = "0.8.2"
 rand = "0.8.5"

@@ -1,16 +1,17 @@
 #![allow(clippy::excessive_precision)]
 
+extern crate ukf_pyrs;
 
-use crate::dynamic_functions::{MeasurementFunction, TransitionFunction};
-use crate::examples::pinhole_camera::{CameraProjector, PinholeCamera};
-use crate::examples::simple_example::FirstOrderTransitionFunction;
-use crate::parallel::UKFParallel;
-use crate::sigma_points::SigmaPoints;
-use crate::unscented_kalman_filter::UnscentedKalmanFilter;
-use crate::Float;
 use ndarray::{arr1, arr2, Array, Array1, Array2, ArrayView1, Axis};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
+use ukf_pyrs::dynamic_functions::{MeasurementFunction, TransitionFunction};
+use ukf_pyrs::functions::pinhole_camera::{CameraProjector, PinholeCamera};
+use ukf_pyrs::functions::simple_example::FirstOrderTransitionFunction;
+use ukf_pyrs::parallel::UKFParallel;
+use ukf_pyrs::sigma_points::SigmaPoints;
+use ukf_pyrs::unscented_kalman_filter::UnscentedKalmanFilter;
+use ukf_pyrs::Float;
 
 fn create_cam1() -> PinholeCamera {
     let extrinsic_matrix = arr2(&[
