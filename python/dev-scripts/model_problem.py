@@ -189,13 +189,13 @@ hx_rust = CameraProjector([cam1.to_rust(), cam2.to_rust()])
 
 fx_rust = FirstOrderTransitionFunction(3)
 kalman_filter = UKF(dim_x, dim_z, hx_rust, fx_rust, sigma_points)
-# kalman_filter = UKF(dim_x, dim_z, hx_first_order, fx_first_order, sigma_points)
 
 
 kalman_filter.Q = np.diag([1] * 3 + [3e3] * 3).astype(float_type)
 kalman_filter.Q *= 1e-2
 kalman_filter.R = np.diag([1, 1]).astype(float_type) * 1e0
 kalman_filter.P = np.diag([1e0] * 3 + [1e0] * 3).astype(float_type)
+
 predictions_list = []
 for p1, p2 in zip(
     proj_points_obs1.astype(float_type), proj_points_obs2.astype(float_type)

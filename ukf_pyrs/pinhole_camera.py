@@ -4,10 +4,7 @@ from functools import cached_property
 import cv2
 import numpy as np
 
-from ukf_pyrs import (
-    Rust_PinholeCamera,
-    CameraProjector
-)
+from ukf_pyrs import Rust_PinholeCamera, CameraProjector
 
 __all__ = ["PinholeCamera", "CameraProjector"]
 
@@ -145,5 +142,3 @@ def rotation_from_lookat(
     y = np.cross(z, x)
     rot_mat = np.stack([x, y, z], axis=1).astype(np.float32)
     return cv2.Rodrigues(rot_mat)[0]
-
-
