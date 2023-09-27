@@ -23,7 +23,7 @@ impl UKFParallel {
 
     pub fn predict(&mut self, dt: Float) -> Result<(), Error> {
         self.ukfs
-            .par_iter_mut()
+            .iter_mut()
             .try_for_each(|ukf| ukf.predict(dt))?;
         Ok(())
     }
