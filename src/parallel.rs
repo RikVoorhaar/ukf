@@ -38,8 +38,8 @@ impl UKFParallel {
         }
 
         self.ukfs
-            .par_iter_mut()
-            .zip(z_vec.par_iter())
+            .iter_mut()
+            .zip(z_vec.iter())
             .try_for_each(|(ukf, z)| ukf.update(*z))?;
         Ok(())
     }
